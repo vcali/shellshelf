@@ -44,3 +44,6 @@ Temporary Items
 # Temporary files
 *.tmp
 *.temp
+
+# Development plan (internal documentation)
+DEVELOPMENT_PLAN.md
