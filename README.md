@@ -1,5 +1,5 @@
 # reqbib
-Reqbib is a CLI tool for managing your curl commands. Built-in bash history auto-discovery, native Github and S3 integration and more.
+Reqbib is a CLI tool for managing your curl commands. Built-in shell history auto-discovery, native Github and S3 integration and more.
 
 **ReqBib** stands for "Request Bibliography" - a smart library for your HTTP requests. It's a Rust-based CLI tool that helps you store, search, and manage your curl commands with intelligent keyword extraction and automatic history import.
 
