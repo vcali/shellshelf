@@ -3,6 +3,29 @@
 ## Overview
 This file contains instructions and guidelines for AI agents working on the ReqBib project. All agents should follow these rules when making changes to ensure code quality and consistency.
 
+## Project Context and Planning
+
+**MANDATORY: Read and use the DEVELOPMENT_PLAN.md file**
+
+Before making any changes, agents MUST:
+
+1. **Read `DEVELOPMENT_PLAN.md`** to understand:
+   - Current project status and implemented features
+   - Future expansion plans and roadmap
+   - Technical architecture decisions
+   - Known limitations and constraints
+
+2. **Update `DEVELOPMENT_PLAN.md`** when making changes:
+   - Mark features as completed when implementing them
+   - Add new features to the appropriate sections
+   - Update implementation status and examples
+   - Maintain accurate documentation of the project state
+
+3. **Align changes with the plan**:
+   - Ensure new features fit within the project's vision
+   - Follow established architectural patterns
+   - Consider how changes affect future planned features
+
 ## Required Validation Before Commits
 
 **MANDATORY: Every change made by an agent MUST be validated before committing by running:**
