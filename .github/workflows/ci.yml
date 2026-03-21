@@ -104,8 +104,10 @@ jobs:
         include:
           - os: ubuntu-latest
             artifact-name: reqbib-linux
-          - os: windows-latest
-            artifact-name: reqbib-windows
+          # Temporarily disabled Windows builds due to slow performance
+          # TODO: Re-enable when we find a faster Windows runner or pre-built image
+          # - os: windows-latest
+          #   artifact-name: reqbib-windows
           - os: macos-latest
             artifact-name: reqbib-macos
         
