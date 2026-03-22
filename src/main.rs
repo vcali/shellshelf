@@ -242,6 +242,11 @@ fn parse_curl_commands_from_history(history_content: &str) -> Vec<String> {
     curl_commands
 }
 
+fn parse_curl_commands_from_history_bytes(history_content: &[u8]) -> Vec<String> {
+    let history_content = String::from_utf8_lossy(history_content);
+    parse_curl_commands_from_history(history_content.as_ref())
+}
+
 fn import_from_history() -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
 
@@ -253,8 +258,8 @@ fn import_from_history() -> Result<Vec<String>, Box<dyn std::error::Error>> {
 
     for history_file in history_files {
         if history_file.exists() {
-            if let Ok(content) = fs::read_to_string(&history_file) {
-                let commands = parse_curl_commands_from_history(&content);
+            if let Ok(content) = fs::read(&history_file) {
+                let commands = parse_curl_commands_from_history_bytes(&content);
                 for cmd in commands {
                     if seen.insert(cmd.clone()) {
                         all_commands.push(cmd);
@@ -587,6 +592,17 @@ curl -X POST https://example3.com
         assert!(commands.contains(&"curl https://example2.com".to_string()));
         assert!(commands.contains(&"curl -X POST https://example3.com".to_string()));
         assert!(commands.contains(&"curl -H \"Auth: token\" https://example4.com".to_string()));
+    }
+
+    #[test]
+    fn test_parse_curl_commands_from_non_utf8_history() {
+        let history_bytes = b": 1647875000:0;curl https://example.com\n\x83\xffgarbage\n: 1647875001:0;curl -X POST https://api.github.com/repos\n";
+
+        let commands = parse_curl_commands_from_history_bytes(history_bytes);
+
+        assert_eq!(commands.len(), 2);
+        assert!(commands.contains(&"curl https://example.com".to_string()));
+        assert!(commands.contains(&"curl -X POST https://api.github.com/repos".to_string()));
     }
 
     #[test]

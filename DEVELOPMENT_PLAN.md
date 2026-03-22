@@ -29,8 +29,9 @@ ReqBib is a Rust-based CLI tool designed to facilitate the management of curl co
 - **Regex Processing**: Smart keyword extraction from URLs, domains, paths, headers
 - **Regex Reuse**: Shared static regex compilation for keyword extraction and history parsing
 - **Search Indexing**: Lowercased keyword matching to reduce repeated normalization during searches
+- **History Resilience**: Lossy history file decoding to tolerate non-UTF-8 shell history entries
 - **Cross-shell Support**: Imports from both `.bash_history` and `.zsh_history`
-- **Testing**: 34 tests (18 unit + 16 integration) with 100% pass rate
+- **Testing**: 35 tests (19 unit + 16 integration) with 100% pass rate
 
 ### CLI Interface Updates ✅
 **Recent Changes:**
@@ -38,6 +39,7 @@ ReqBib is a Rust-based CLI tool designed to facilitate the management of curl co
 - **New List Option**: Added `-l`/`--list` flag to explicitly list all stored commands
 - **Improved UX**: More intuitive user experience with better discoverability
 - **Performance Cleanup**: Reused compiled regexes, normalized keyword indexing, and reduced duplicate-check overhead during history import
+- **History Import Fix**: Shell history import now handles non-UTF-8 history files instead of skipping them
 
 ### Smart Keyword Extraction
 The tool automatically extracts keywords from:
@@ -50,10 +52,10 @@ The tool automatically extracts keywords from:
 ### Testing Implementation ✅
 **Comprehensive Test Suite:**
 
-**Unit Tests (18 tests):**
+**Unit Tests (19 tests):**
 - Keyword extraction from various curl command formats
 - Database operations (add, bulk add, search, save/load, duplicates)
-- History parsing with mocked bash and zsh formats
+- History parsing with mocked bash, zsh, and non-UTF-8 history formats
 - Search functionality (case-insensitive, partial matches, multi-keyword)
 - File I/O operations with temporary directories
 
@@ -190,6 +192,7 @@ reqbib -l github api
 
 ### Quality Assurance ✅
 - **34 total tests** with 100% pass rate
+- **35 total tests** with 100% pass rate
 - **Continuous validation** of all functionality
 - **Regression protection** for future changes
 - **Documentation** through test examples
