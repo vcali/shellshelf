@@ -118,6 +118,16 @@ Minimal GitHub-backed config:
 - Detailed CLI and config reference: [`docs/reference.md`](docs/reference.md)
 - Technical overview and code structure: [`docs/technical-overview.md`](docs/technical-overview.md)
 
+## Releases
+
+Pushes to `main` publish a GitHub Release automatically.
+
+- Tags use the format `v<crate-version>-build.<run_number>`
+- Release assets currently include:
+  - `reqbib-x86_64-unknown-linux-gnu.tar.gz`
+  - `reqbib-x86_64-apple-darwin.tar.gz`
+  - matching `.sha256` checksum files
+
 ## Sensitive Data
 
 ReqBib stores commands as provided. If a command contains live tokens, cookies, or other credentials, shared repository mode can expose them to teammates or commit history. Secret detection and redaction are planned but not implemented yet.
