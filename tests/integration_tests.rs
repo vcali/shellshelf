@@ -8,34 +8,121 @@ use tempfile::TempDir;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-fn write_config(
+fn write_path_config(
     config_path: &Path,
-    github_repo: Option<&str>,
-    shared_repo: Option<&Path>,
+    shared_repo: &Path,
     teams_dir: &str,
-    auto_update_repo: Option<bool>,
+    default_team: Option<&str>,
+    default_all_teams: Option<bool>,
+    default_list_limit: Option<usize>,
 ) {
-    let mut config = serde_json::Map::new();
-    if let Some(github_repo) = github_repo {
-        config.insert(
-            "github_repo".to_string(),
-            serde_json::Value::String(github_repo.to_string()),
-        );
-    }
-    if let Some(shared_repo) = shared_repo {
-        config.insert(
-            "shared_repo_path".to_string(),
-            serde_json::to_value(shared_repo).unwrap(),
-        );
-    }
-    config.insert(
+    let mut shared_repo_value = serde_json::Map::new();
+    shared_repo_value.insert(
+        "mode".to_string(),
+        serde_json::Value::String("path".to_string()),
+    );
+    shared_repo_value.insert(
+        "path".to_string(),
+        serde_json::Value::String(shared_repo.display().to_string()),
+    );
+    shared_repo_value.insert(
         "teams_dir".to_string(),
         serde_json::Value::String(teams_dir.to_string()),
     );
-    if let Some(auto_update_repo) = auto_update_repo {
+    if let Some(default_team) = default_team {
+        shared_repo_value.insert(
+            "default_team".to_string(),
+            serde_json::Value::String(default_team.to_string()),
+        );
+    }
+    if let Some(default_all_teams) = default_all_teams {
+        shared_repo_value.insert(
+            "default_all_teams".to_string(),
+            serde_json::Value::Bool(default_all_teams),
+        );
+    }
+
+    let mut config = serde_json::Map::new();
+    config.insert(
+        "shared_repo".to_string(),
+        serde_json::Value::Object(shared_repo_value),
+    );
+    if let Some(default_list_limit) = default_list_limit {
         config.insert(
+            "default_list_limit".to_string(),
+            serde_json::Value::Number(default_list_limit.into()),
+        );
+    }
+
+    fs::write(
+        config_path,
+        serde_json::to_string_pretty(&serde_json::Value::Object(config)).unwrap(),
+    )
+    .unwrap();
+}
+
+#[derive(Default)]
+struct GithubConfigOptions<'a> {
+    default_team: Option<&'a str>,
+    default_all_teams: Option<bool>,
+    auto_update_repo: Option<bool>,
+    auto_update_interval_minutes: Option<u64>,
+    default_list_limit: Option<usize>,
+}
+
+fn write_github_config(
+    config_path: &Path,
+    github_repo: &str,
+    teams_dir: &str,
+    options: GithubConfigOptions<'_>,
+) {
+    let mut shared_repo = serde_json::Map::new();
+    shared_repo.insert(
+        "mode".to_string(),
+        serde_json::Value::String("github".to_string()),
+    );
+    shared_repo.insert(
+        "github_repo".to_string(),
+        serde_json::Value::String(github_repo.to_string()),
+    );
+    shared_repo.insert(
+        "teams_dir".to_string(),
+        serde_json::Value::String(teams_dir.to_string()),
+    );
+    if let Some(default_team) = options.default_team {
+        shared_repo.insert(
+            "default_team".to_string(),
+            serde_json::Value::String(default_team.to_string()),
+        );
+    }
+    if let Some(default_all_teams) = options.default_all_teams {
+        shared_repo.insert(
+            "default_all_teams".to_string(),
+            serde_json::Value::Bool(default_all_teams),
+        );
+    }
+    if let Some(auto_update_repo) = options.auto_update_repo {
+        shared_repo.insert(
             "auto_update_repo".to_string(),
             serde_json::Value::Bool(auto_update_repo),
+        );
+    }
+    if let Some(auto_update_interval_minutes) = options.auto_update_interval_minutes {
+        shared_repo.insert(
+            "auto_update_interval_minutes".to_string(),
+            serde_json::Value::Number(auto_update_interval_minutes.into()),
+        );
+    }
+
+    let mut config = serde_json::Map::new();
+    config.insert(
+        "shared_repo".to_string(),
+        serde_json::Value::Object(shared_repo),
+    );
+    if let Some(default_list_limit) = options.default_list_limit {
+        config.insert(
+            "default_list_limit".to_string(),
+            serde_json::Value::Number(default_list_limit.into()),
         );
     }
 
@@ -128,13 +215,17 @@ fn test_help_output() {
         ))
         .stdout(predicate::str::contains("Usage: reqbib"))
         .stdout(predicate::str::contains("--add"))
+        .stdout(predicate::str::contains("--description"))
         .stdout(predicate::str::contains("--import"))
         .stdout(predicate::str::contains("--list"))
+        .stdout(predicate::str::contains("--limit"))
         .stdout(predicate::str::contains("--config"))
         .stdout(predicate::str::contains("--repo"))
         .stdout(predicate::str::contains("--teams-dir"))
         .stdout(predicate::str::contains("--team"))
-        .stdout(predicate::str::contains("--all-teams"));
+        .stdout(predicate::str::contains("--all-teams"))
+        .stdout(predicate::str::contains("--local-only"))
+        .stdout(predicate::str::contains("--shared-only"));
 }
 
 #[test]
@@ -177,6 +268,26 @@ fn test_add_command() {
 }
 
 #[test]
+fn test_add_command_with_description() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+
+    cmd.env("HOME", temp_dir.path())
+        .arg("--add")
+        .arg("curl https://example.com/test")
+        .arg("--description")
+        .arg("Example request");
+
+    cmd.assert().success().stdout(predicate::str::contains(
+        "Added curl command: curl https://example.com/test (Example request)",
+    ));
+
+    let data_file = temp_dir.path().join(".reqbib").join("commands.json");
+    let content = fs::read_to_string(data_file).unwrap();
+    assert!(content.contains("\"description\": \"Example request\""));
+}
+
+#[test]
 fn test_list_empty_database() {
     let temp_dir = TempDir::new().unwrap();
     let mut cmd = Command::cargo_bin("reqbib").unwrap();
@@ -192,11 +303,12 @@ fn test_list_empty_database() {
 #[test]
 fn test_list_with_commands() {
     let temp_dir = TempDir::new().unwrap();
+    let multiline_command = "curl -X POST https://api.example.com/graphql \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"query\":\"{ viewer { login } }\"}'";
 
     // First, add a command
     let mut cmd = Command::cargo_bin("reqbib").unwrap();
     cmd.env("HOME", temp_dir.path());
-    cmd.arg("--add").arg("curl https://example.com");
+    cmd.arg("--add").arg(multiline_command);
     cmd.assert().success();
 
     // Then list commands
@@ -206,8 +318,37 @@ fn test_list_with_commands() {
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("All stored curl commands (1):"))
-        .stdout(predicate::str::contains("curl https://example.com"));
+        .stdout(predicate::str::contains("=== LOCAL ==="))
+        .stdout(predicate::str::contains("[1]"))
+        .stdout(predicate::str::contains(
+            "curl -X POST https://api.example.com/graphql \\",
+        ))
+        .stdout(predicate::str::contains(
+            "  -H \"Content-Type: application/json\" \\",
+        ));
+}
+
+#[test]
+fn test_list_shows_description_next_to_entry_number() {
+    let temp_dir = TempDir::new().unwrap();
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", temp_dir.path())
+        .arg("--add")
+        .arg("curl https://api.example.com/health")
+        .arg("--description")
+        .arg("Health check");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", temp_dir.path()).arg("--list");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("[1] Health check"))
+        .stdout(predicate::str::contains(
+            "curl https://api.example.com/health",
+        ));
 }
 
 #[test]
@@ -218,7 +359,7 @@ fn test_search_commands() {
     let commands = vec![
         "curl https://api.github.com/users",
         "curl https://example.com/test",
-        "curl -X POST https://api.github.com/repos",
+        "curl -X POST https://api.github.com/repos \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"name\":\"reqbib\"}'",
     ];
 
     for command in commands {
@@ -235,11 +376,35 @@ fn test_search_commands() {
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains(
-            "Found 2 matching curl command(s):",
-        ))
+        .stdout(predicate::str::contains("=== LOCAL ==="))
         .stdout(predicate::str::contains("api.github.com/users"))
-        .stdout(predicate::str::contains("api.github.com/repos"));
+        .stdout(predicate::str::contains("api.github.com/repos"))
+        .stdout(predicate::str::contains(
+            "  -H \"Content-Type: application/json\" \\",
+        ));
+}
+
+#[test]
+fn test_search_matches_description_text() {
+    let temp_dir = TempDir::new().unwrap();
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", temp_dir.path())
+        .arg("--add")
+        .arg("curl https://api.example.com/repos")
+        .arg("--description")
+        .arg("Create repository");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", temp_dir.path()).arg("repository");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("[1] Create repository"))
+        .stdout(predicate::str::contains(
+            "curl https://api.example.com/repos",
+        ));
 }
 
 #[test]
@@ -257,8 +422,23 @@ fn test_search_no_results() {
     cmd.env("HOME", temp_dir.path());
     cmd.arg("nonexistent");
 
-    cmd.assert().success().stdout(predicate::str::contains(
-        "No curl commands found matching keywords: nonexistent",
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("No matching curl commands."));
+}
+
+#[test]
+fn test_description_without_add_fails() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+
+    cmd.env("HOME", temp_dir.path())
+        .arg("--description")
+        .arg("Health check")
+        .arg("--list");
+
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "--description can only be used with --add.",
     ));
 }
 
@@ -285,9 +465,7 @@ fn test_multiple_keyword_search() {
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains(
-            "Found 1 matching curl command(s):",
-        ))
+        .stdout(predicate::str::contains("=== LOCAL ==="))
         .stdout(predicate::str::contains("api.github.com/repos"));
 }
 
@@ -323,7 +501,7 @@ curl https://httpbin.org/get"#;
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("All stored curl commands (3):"))
+        .stdout(predicate::str::contains("=== LOCAL ==="))
         .stdout(predicate::str::contains("curl https://example.com/api"))
         .stdout(predicate::str::contains(
             "curl -X POST https://github.com/api/repos",
@@ -379,7 +557,8 @@ fn test_duplicate_prevention() {
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("All stored curl commands (1):"));
+        .stdout(predicate::str::contains("=== LOCAL ==="))
+        .stdout(predicate::str::contains("[1]"));
 }
 
 #[test]
@@ -398,7 +577,8 @@ fn test_short_flags() {
     cmd.arg("-l");
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("All stored curl commands (1):"));
+        .stdout(predicate::str::contains("=== LOCAL ==="))
+        .stdout(predicate::str::contains("[1]"));
 }
 
 #[test]
@@ -419,7 +599,7 @@ fn test_list_with_filter() {
     let commands = vec![
         "curl https://api.github.com/users",
         "curl https://example.com/test",
-        "curl -X POST https://api.github.com/repos",
+        "curl -X POST https://api.github.com/repos \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"name\":\"reqbib\"}'",
         "curl https://gitlab.com/api/projects",
     ];
 
@@ -437,11 +617,12 @@ fn test_list_with_filter() {
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains(
-            "Found 2 matching curl command(s):",
-        ))
+        .stdout(predicate::str::contains("=== LOCAL ==="))
         .stdout(predicate::str::contains("api.github.com/users"))
         .stdout(predicate::str::contains("api.github.com/repos"))
+        .stdout(predicate::str::contains(
+            "  -H \"Content-Type: application/json\" \\",
+        ))
         .stdout(predicate::str::contains("example.com").not())
         .stdout(predicate::str::contains("gitlab.com").not());
 
@@ -452,9 +633,7 @@ fn test_list_with_filter() {
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains(
-            "Found 2 matching curl command(s):",
-        ))
+        .stdout(predicate::str::contains("=== LOCAL ==="))
         .stdout(predicate::str::contains("api.github.com/users"))
         .stdout(predicate::str::contains("api.github.com/repos"));
 
@@ -465,9 +644,7 @@ fn test_list_with_filter() {
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains(
-            "Found 1 matching curl command(s):",
-        ))
+        .stdout(predicate::str::contains("=== LOCAL ==="))
         .stdout(predicate::str::contains("api.github.com/repos"))
         .stdout(predicate::str::contains("api.github.com/users").not());
 }
@@ -487,9 +664,9 @@ fn test_list_with_filter_no_results() {
     cmd.env("HOME", temp_dir.path());
     cmd.args(["-l", "nonexistent"]);
 
-    cmd.assert().success().stdout(predicate::str::contains(
-        "No curl commands found matching keywords: nonexistent",
-    ));
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("No matching curl commands."));
 }
 
 #[test]
@@ -498,7 +675,8 @@ fn test_add_command_to_team_repository() {
     let shared_repo = temp_dir.path().join("shared-reqbib");
     let mut cmd = Command::cargo_bin("reqbib").unwrap();
 
-    cmd.arg("--repo")
+    cmd.env("HOME", temp_dir.path())
+        .arg("--repo")
         .arg(&shared_repo)
         .arg("--team")
         .arg("platform")
@@ -525,7 +703,8 @@ fn test_team_repository_storage_is_isolated_per_team() {
     let shared_repo = temp_dir.path().join("shared-reqbib");
 
     let mut cmd = Command::cargo_bin("reqbib").unwrap();
-    cmd.arg("--repo")
+    cmd.env("HOME", temp_dir.path())
+        .arg("--repo")
         .arg(&shared_repo)
         .arg("--team")
         .arg("platform")
@@ -534,7 +713,8 @@ fn test_team_repository_storage_is_isolated_per_team() {
     cmd.assert().success();
 
     let mut cmd = Command::cargo_bin("reqbib").unwrap();
-    cmd.arg("--repo")
+    cmd.env("HOME", temp_dir.path())
+        .arg("--repo")
         .arg(&shared_repo)
         .arg("--team")
         .arg("payments")
@@ -543,7 +723,8 @@ fn test_team_repository_storage_is_isolated_per_team() {
     cmd.assert().success();
 
     let mut cmd = Command::cargo_bin("reqbib").unwrap();
-    cmd.arg("--repo")
+    cmd.env("HOME", temp_dir.path())
+        .arg("--repo")
         .arg(&shared_repo)
         .arg("--team")
         .arg("platform")
@@ -554,7 +735,8 @@ fn test_team_repository_storage_is_isolated_per_team() {
         .stdout(predicate::str::contains("api.example.com/payments").not());
 
     let mut cmd = Command::cargo_bin("reqbib").unwrap();
-    cmd.arg("--repo")
+    cmd.env("HOME", temp_dir.path())
+        .arg("--repo")
         .arg(&shared_repo)
         .arg("--team")
         .arg("payments")
@@ -571,7 +753,8 @@ fn test_invalid_team_name_fails() {
     let shared_repo = temp_dir.path().join("shared-reqbib");
     let mut cmd = Command::cargo_bin("reqbib").unwrap();
 
-    cmd.arg("--repo")
+    cmd.env("HOME", temp_dir.path())
+        .arg("--repo")
         .arg(&shared_repo)
         .arg("--team")
         .arg("../platform")
@@ -591,11 +774,12 @@ fn test_team_repository_uses_default_config() {
     let config_path = reqbib_dir.join("config.json");
 
     fs::create_dir_all(&reqbib_dir).unwrap();
-    write_config(
+    write_path_config(
         &config_path,
-        Some("acme/shared-reqbib"),
-        Some(&shared_repo),
+        &shared_repo,
         "company-teams",
+        None,
+        None,
         None,
     );
 
@@ -625,11 +809,12 @@ fn test_cli_repo_overrides_configured_repo() {
     let config_path = reqbib_dir.join("config.json");
 
     fs::create_dir_all(&reqbib_dir).unwrap();
-    write_config(
+    write_path_config(
         &config_path,
-        Some("acme/shared-reqbib"),
-        Some(&configured_repo),
+        &configured_repo,
         "company-teams",
+        None,
+        None,
         None,
     );
 
@@ -665,11 +850,12 @@ fn test_cli_teams_dir_overrides_configured_teams_dir() {
     let config_path = reqbib_dir.join("config.json");
 
     fs::create_dir_all(&reqbib_dir).unwrap();
-    write_config(
+    write_path_config(
         &config_path,
-        Some("acme/shared-reqbib"),
-        Some(&shared_repo),
+        &shared_repo,
         "company-teams",
+        None,
+        None,
         None,
     );
 
@@ -697,15 +883,411 @@ fn test_cli_teams_dir_overrides_configured_teams_dir() {
 }
 
 #[test]
-fn test_repo_without_team_fails() {
+fn test_default_reads_stay_local_without_default_team_or_all_teams() {
+    let temp_dir = TempDir::new().unwrap();
+    let home_dir = temp_dir.path();
+    let shared_repo = home_dir.join("shared-reqbib");
+    let reqbib_dir = home_dir.join(".reqbib");
+    let config_path = reqbib_dir.join("config.json");
+
+    fs::create_dir_all(&reqbib_dir).unwrap();
+    write_path_config(
+        &config_path,
+        &shared_repo,
+        "company-teams",
+        None,
+        None,
+        None,
+    );
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir)
+        .arg("--add")
+        .arg("curl https://local.example.com/health");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir)
+        .arg("--team")
+        .arg("platform")
+        .arg("--add")
+        .arg("curl -X POST https://shared.example.com/health \\\n  -H \"X-Team: platform\"");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir).arg("health");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("=== LOCAL ==="))
+        .stdout(predicate::str::contains(
+            "curl https://local.example.com/health",
+        ))
+        .stdout(predicate::str::contains("=== SHARED / PLATFORM ===").not())
+        .stdout(
+            predicate::str::contains("curl -X POST https://shared.example.com/health \\").not(),
+        );
+}
+
+#[test]
+fn test_default_reads_include_configured_default_team() {
+    let temp_dir = TempDir::new().unwrap();
+    let home_dir = temp_dir.path();
+    let shared_repo = home_dir.join("shared-reqbib");
+    let reqbib_dir = home_dir.join(".reqbib");
+    let config_path = reqbib_dir.join("config.json");
+
+    fs::create_dir_all(&reqbib_dir).unwrap();
+    write_path_config(
+        &config_path,
+        &shared_repo,
+        "company-teams",
+        Some("platform"),
+        None,
+        None,
+    );
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir)
+        .arg("--add")
+        .arg("curl https://local.example.com/health");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir)
+        .arg("--team")
+        .arg("platform")
+        .arg("--add")
+        .arg("curl -X POST https://shared.example.com/health \\\n  -H \"X-Team: platform\"");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir).arg("health");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("=== LOCAL ==="))
+        .stdout(predicate::str::contains("=== SHARED / PLATFORM ==="))
+        .stdout(predicate::str::contains(
+            "curl https://local.example.com/health",
+        ))
+        .stdout(predicate::str::contains(
+            "curl -X POST https://shared.example.com/health \\",
+        ))
+        .stdout(predicate::str::contains("  -H \"X-Team: platform\""));
+}
+
+#[test]
+fn test_local_only_limits_default_reads_to_local_commands() {
+    let temp_dir = TempDir::new().unwrap();
+    let home_dir = temp_dir.path();
+    let shared_repo = home_dir.join("shared-reqbib");
+    let reqbib_dir = home_dir.join(".reqbib");
+    let config_path = reqbib_dir.join("config.json");
+
+    fs::create_dir_all(&reqbib_dir).unwrap();
+    write_path_config(
+        &config_path,
+        &shared_repo,
+        "company-teams",
+        None,
+        None,
+        None,
+    );
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir)
+        .arg("--add")
+        .arg("curl https://local.example.com/health");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir)
+        .arg("--team")
+        .arg("platform")
+        .arg("--add")
+        .arg("curl https://shared.example.com/health");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir).arg("--local-only").arg("health");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("=== LOCAL ==="))
+        .stdout(predicate::str::contains(
+            "curl https://local.example.com/health",
+        ))
+        .stdout(predicate::str::contains("=== SHARED / PLATFORM ===").not())
+        .stdout(predicate::str::contains("curl https://shared.example.com/health").not());
+}
+
+#[test]
+fn test_shared_only_limits_default_reads_to_shared_commands() {
+    let temp_dir = TempDir::new().unwrap();
+    let home_dir = temp_dir.path();
+    let shared_repo = home_dir.join("shared-reqbib");
+    let reqbib_dir = home_dir.join(".reqbib");
+    let config_path = reqbib_dir.join("config.json");
+
+    fs::create_dir_all(&reqbib_dir).unwrap();
+    write_path_config(
+        &config_path,
+        &shared_repo,
+        "company-teams",
+        Some("platform"),
+        None,
+        None,
+    );
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir)
+        .arg("--add")
+        .arg("curl https://local.example.com/health");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir)
+        .arg("--team")
+        .arg("platform")
+        .arg("--add")
+        .arg("curl https://shared.example.com/health");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir).arg("--shared-only").arg("health");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("=== SHARED / PLATFORM ==="))
+        .stdout(predicate::str::contains(
+            "curl https://shared.example.com/health",
+        ))
+        .stdout(predicate::str::contains("=== LOCAL ===").not())
+        .stdout(predicate::str::contains("curl https://local.example.com/health").not());
+}
+
+#[test]
+fn test_default_all_teams_includes_every_team_for_default_reads() {
+    let temp_dir = TempDir::new().unwrap();
+    let home_dir = temp_dir.path();
+    let shared_repo = home_dir.join("shared-reqbib");
+    let reqbib_dir = home_dir.join(".reqbib");
+    let config_path = reqbib_dir.join("config.json");
+
+    fs::create_dir_all(&reqbib_dir).unwrap();
+    write_path_config(
+        &config_path,
+        &shared_repo,
+        "company-teams",
+        None,
+        Some(true),
+        None,
+    );
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir)
+        .arg("--add")
+        .arg("curl https://local.example.com/health");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir)
+        .arg("--team")
+        .arg("platform")
+        .arg("--add")
+        .arg("curl https://shared.example.com/health");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir)
+        .arg("--team")
+        .arg("payments")
+        .arg("--add")
+        .arg("curl https://payments.example.com/health");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir).arg("health");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("=== LOCAL ==="))
+        .stdout(predicate::str::contains("=== SHARED / PLATFORM ==="))
+        .stdout(predicate::str::contains("=== SHARED / PAYMENTS ==="))
+        .stdout(predicate::str::contains(
+            "curl https://shared.example.com/health",
+        ))
+        .stdout(predicate::str::contains(
+            "curl https://payments.example.com/health",
+        ))
+        .stdout(predicate::str::contains(
+            "curl https://local.example.com/health",
+        ));
+}
+
+#[test]
+fn test_repo_without_default_shared_selection_stays_local_only() {
+    let temp_dir = TempDir::new().unwrap();
+    let shared_repo = temp_dir.path().join("shared-reqbib");
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", temp_dir.path())
+        .arg("--repo")
+        .arg(&shared_repo)
+        .arg("--team")
+        .arg("platform")
+        .arg("--add")
+        .arg("curl https://api.example.com/platform");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", temp_dir.path())
+        .arg("--repo")
+        .arg(&shared_repo)
+        .arg("--list");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("No curl commands stored."));
+}
+
+#[test]
+fn test_shared_only_without_default_team_or_all_teams_fails() {
     let temp_dir = TempDir::new().unwrap();
     let shared_repo = temp_dir.path().join("shared-reqbib");
     let mut cmd = Command::cargo_bin("reqbib").unwrap();
 
-    cmd.arg("--repo").arg(&shared_repo).arg("--list");
+    cmd.env("HOME", temp_dir.path())
+        .arg("--repo")
+        .arg(&shared_repo)
+        .arg("--shared-only")
+        .arg("--list");
 
     cmd.assert().failure().stderr(predicate::str::contains(
-        "--repo requires --team when using shared repository mode.",
+        "No default shared selection configured. Use --team, --all-teams, or configure shared_repo.default_team / shared_repo.default_all_teams.",
+    ));
+}
+
+#[test]
+fn test_default_reads_hide_local_duplicates_that_exist_in_shared_storage() {
+    let temp_dir = TempDir::new().unwrap();
+    let home_dir = temp_dir.path();
+    let shared_repo = home_dir.join("shared-reqbib");
+    let reqbib_dir = home_dir.join(".reqbib");
+    let config_path = reqbib_dir.join("config.json");
+
+    fs::create_dir_all(&reqbib_dir).unwrap();
+    write_path_config(
+        &config_path,
+        &shared_repo,
+        "company-teams",
+        Some("platform"),
+        None,
+        None,
+    );
+
+    let duplicate_command = "curl https://shared.example.com/health";
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir)
+        .arg("--add")
+        .arg(duplicate_command);
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir)
+        .arg("--add")
+        .arg("curl https://local.example.com/status");
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir)
+        .arg("--team")
+        .arg("platform")
+        .arg("--add")
+        .arg(duplicate_command);
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir).arg("--list");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("=== LOCAL ==="))
+        .stdout(predicate::str::contains("=== SHARED / PLATFORM ==="))
+        .stdout(predicate::str::contains(
+            "curl https://local.example.com/status",
+        ))
+        .stdout(predicate::str::contains(
+            "curl https://shared.example.com/health",
+        ))
+        .stdout(predicate::str::contains(
+            "1 local curl was hidden because it duplicates shared storage.",
+        ));
+}
+
+#[test]
+fn test_list_uses_default_limit_and_can_be_overridden() {
+    let temp_dir = TempDir::new().unwrap();
+    let home_dir = temp_dir.path();
+    let reqbib_dir = home_dir.join(".reqbib");
+    let config_path = reqbib_dir.join("config.json");
+
+    fs::create_dir_all(&reqbib_dir).unwrap();
+    fs::write(
+        &config_path,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "default_list_limit": 2
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    for index in 1..=3 {
+        let mut cmd = Command::cargo_bin("reqbib").unwrap();
+        cmd.env("HOME", home_dir)
+            .arg("--add")
+            .arg(format!("curl https://local.example.com/{index}"));
+        cmd.assert().success();
+    }
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir).arg("--list");
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("curl https://local.example.com/1"))
+        .stdout(predicate::str::contains("curl https://local.example.com/2"))
+        .stdout(predicate::str::contains("curl https://local.example.com/3").not())
+        .stdout(predicate::str::contains(
+            "Showing first 2 curl commands. 1 additional curl was hidden by the active list limit.",
+        ));
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir)
+        .arg("--list")
+        .arg("--limit")
+        .arg("0");
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("curl https://local.example.com/1"))
+        .stdout(predicate::str::contains("curl https://local.example.com/2"))
+        .stdout(predicate::str::contains("curl https://local.example.com/3"))
+        .stdout(predicate::str::contains("active list limit").not());
+}
+
+#[test]
+fn test_limit_requires_list_mode() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+
+    cmd.env("HOME", temp_dir.path())
+        .arg("--limit")
+        .arg("5")
+        .arg("health");
+
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "--limit can only be used with --list.",
     ));
 }
 
@@ -720,7 +1302,35 @@ fn test_team_without_repo_or_config_fails() {
         .arg("--list");
 
     cmd.assert().failure().stderr(predicate::str::contains(
-        "No shared repository configured. Use --repo, set shared_repo_path in config, or configure github_repo for gh-based checkout.",
+        "No shared repository configured. Use --repo or configure shared_repo in config.",
+    ));
+}
+
+#[test]
+fn test_legacy_flat_config_is_rejected() {
+    let temp_dir = TempDir::new().unwrap();
+    let home_dir = temp_dir.path();
+    let reqbib_dir = home_dir.join(".reqbib");
+    let config_path = reqbib_dir.join("config.json");
+
+    fs::create_dir_all(&reqbib_dir).unwrap();
+    fs::write(
+        &config_path,
+        r#"{
+  "github_repo": "acme/shared-reqbib",
+  "teams_dir": "company-teams"
+}"#,
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+    cmd.env("HOME", home_dir)
+        .arg("--team")
+        .arg("platform")
+        .arg("--list");
+
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "Legacy flat shared repository config is no longer supported.",
     ));
 }
 
@@ -733,12 +1343,11 @@ fn test_team_repository_uses_github_repo_config_with_gh_clone() {
     let (gh_path, gh_log) = write_mock_gh(home_dir);
 
     fs::create_dir_all(&reqbib_dir).unwrap();
-    write_config(
+    write_github_config(
         &config_path,
-        Some("acme/shared-reqbib"),
-        None,
+        "acme/shared-reqbib",
         "company-teams",
-        None,
+        GithubConfigOptions::default(),
     );
 
     let mut cmd = Command::cargo_bin("reqbib").unwrap();
@@ -781,12 +1390,11 @@ fn test_existing_github_checkout_skips_gh_clone() {
 
     fs::create_dir_all(&reqbib_dir).unwrap();
     fs::create_dir_all(&checkout_root).unwrap();
-    write_config(
+    write_github_config(
         &config_path,
-        Some("acme/shared-reqbib"),
-        None,
+        "acme/shared-reqbib",
         "company-teams",
-        None,
+        GithubConfigOptions::default(),
     );
 
     let mut cmd = Command::cargo_bin("reqbib").unwrap();
@@ -822,12 +1430,15 @@ fn test_existing_github_checkout_auto_updates_with_git() {
 
     fs::create_dir_all(&reqbib_dir).unwrap();
     fs::create_dir_all(&company_teams).unwrap();
-    write_config(
+    write_github_config(
         &config_path,
-        Some("acme/shared-reqbib"),
-        None,
+        "acme/shared-reqbib",
         "company-teams",
-        Some(true),
+        GithubConfigOptions {
+            auto_update_repo: Some(true),
+            auto_update_interval_minutes: Some(60),
+            ..GithubConfigOptions::default()
+        },
     );
 
     let mut cmd = Command::cargo_bin("reqbib").unwrap();
@@ -859,12 +1470,14 @@ fn test_existing_github_checkout_can_disable_auto_update() {
 
     fs::create_dir_all(&reqbib_dir).unwrap();
     fs::create_dir_all(&company_teams).unwrap();
-    write_config(
+    write_github_config(
         &config_path,
-        Some("acme/shared-reqbib"),
-        None,
+        "acme/shared-reqbib",
         "company-teams",
-        Some(false),
+        GithubConfigOptions {
+            auto_update_repo: Some(false),
+            ..GithubConfigOptions::default()
+        },
     );
 
     let mut cmd = Command::cargo_bin("reqbib").unwrap();
@@ -885,7 +1498,8 @@ fn test_list_across_all_teams() {
     let shared_repo = temp_dir.path().join("shared-reqbib");
 
     let mut cmd = Command::cargo_bin("reqbib").unwrap();
-    cmd.arg("--repo")
+    cmd.env("HOME", temp_dir.path())
+        .arg("--repo")
         .arg(&shared_repo)
         .arg("--team")
         .arg("platform")
@@ -894,7 +1508,8 @@ fn test_list_across_all_teams() {
     cmd.assert().success();
 
     let mut cmd = Command::cargo_bin("reqbib").unwrap();
-    cmd.arg("--repo")
+    cmd.env("HOME", temp_dir.path())
+        .arg("--repo")
         .arg(&shared_repo)
         .arg("--team")
         .arg("payments")
@@ -903,21 +1518,21 @@ fn test_list_across_all_teams() {
     cmd.assert().success();
 
     let mut cmd = Command::cargo_bin("reqbib").unwrap();
-    cmd.arg("--repo")
+    cmd.env("HOME", temp_dir.path())
+        .arg("--repo")
         .arg(&shared_repo)
         .arg("--all-teams")
         .arg("--list");
 
     cmd.assert()
         .success()
+        .stdout(predicate::str::contains("=== SHARED / PLATFORM ==="))
+        .stdout(predicate::str::contains("=== SHARED / PAYMENTS ==="))
         .stdout(predicate::str::contains(
-            "All stored curl commands across teams (2):",
+            "curl https://api.example.com/platform",
         ))
         .stdout(predicate::str::contains(
-            "[platform] curl https://api.example.com/platform",
-        ))
-        .stdout(predicate::str::contains(
-            "[payments] curl https://api.example.com/payments",
+            "curl https://api.example.com/payments",
         ));
 }
 
@@ -927,7 +1542,8 @@ fn test_search_across_all_teams() {
     let shared_repo = temp_dir.path().join("shared-reqbib");
 
     let mut cmd = Command::cargo_bin("reqbib").unwrap();
-    cmd.arg("--repo")
+    cmd.env("HOME", temp_dir.path())
+        .arg("--repo")
         .arg(&shared_repo)
         .arg("--team")
         .arg("platform")
@@ -936,7 +1552,8 @@ fn test_search_across_all_teams() {
     cmd.assert().success();
 
     let mut cmd = Command::cargo_bin("reqbib").unwrap();
-    cmd.arg("--repo")
+    cmd.env("HOME", temp_dir.path())
+        .arg("--repo")
         .arg(&shared_repo)
         .arg("--team")
         .arg("payments")
@@ -945,21 +1562,21 @@ fn test_search_across_all_teams() {
     cmd.assert().success();
 
     let mut cmd = Command::cargo_bin("reqbib").unwrap();
-    cmd.arg("--repo")
+    cmd.env("HOME", temp_dir.path())
+        .arg("--repo")
         .arg(&shared_repo)
         .arg("--all-teams")
         .arg("shared");
 
     cmd.assert()
         .success()
+        .stdout(predicate::str::contains("=== SHARED / PLATFORM ==="))
+        .stdout(predicate::str::contains("=== SHARED / PAYMENTS ==="))
         .stdout(predicate::str::contains(
-            "Found 2 matching curl command(s) across teams:",
+            "curl https://api.example.com/shared/health",
         ))
         .stdout(predicate::str::contains(
-            "[platform] curl https://api.example.com/shared/health",
-        ))
-        .stdout(predicate::str::contains(
-            "[payments] curl https://api.example.com/shared/webhook",
+            "curl https://api.example.com/shared/webhook",
         ));
 }
 
@@ -969,7 +1586,8 @@ fn test_team_and_all_teams_conflict() {
     let shared_repo = temp_dir.path().join("shared-reqbib");
     let mut cmd = Command::cargo_bin("reqbib").unwrap();
 
-    cmd.arg("--repo")
+    cmd.env("HOME", temp_dir.path())
+        .arg("--repo")
         .arg(&shared_repo)
         .arg("--team")
         .arg("platform")
@@ -987,7 +1605,8 @@ fn test_add_with_all_teams_fails() {
     let shared_repo = temp_dir.path().join("shared-reqbib");
     let mut cmd = Command::cargo_bin("reqbib").unwrap();
 
-    cmd.arg("--repo")
+    cmd.env("HOME", temp_dir.path())
+        .arg("--repo")
         .arg(&shared_repo)
         .arg("--all-teams")
         .arg("--add")
@@ -995,5 +1614,39 @@ fn test_add_with_all_teams_fails() {
 
     cmd.assert().failure().stderr(predicate::str::contains(
         "--all-teams cannot be used with --add.",
+    ));
+}
+
+#[test]
+fn test_local_only_with_team_fails() {
+    let temp_dir = TempDir::new().unwrap();
+    let shared_repo = temp_dir.path().join("shared-reqbib");
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+
+    cmd.env("HOME", temp_dir.path())
+        .arg("--repo")
+        .arg(&shared_repo)
+        .arg("--team")
+        .arg("platform")
+        .arg("--local-only")
+        .arg("--list");
+
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "--local-only and --shared-only cannot be used with --team.",
+    ));
+}
+
+#[test]
+fn test_shared_only_with_add_fails() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut cmd = Command::cargo_bin("reqbib").unwrap();
+
+    cmd.env("HOME", temp_dir.path())
+        .arg("--shared-only")
+        .arg("--add")
+        .arg("curl https://example.com");
+
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "--local-only and --shared-only cannot be used with --add.",
     ));
 }
