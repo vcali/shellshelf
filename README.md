@@ -13,6 +13,7 @@ The name comes from **Requests Biblioteca**: a library of useful HTTP requests t
 - Search commands by extracted keywords
 - Prevent duplicate entries
 - Store team-specific command libraries inside a shared repository layout
+- Publish Linux and macOS GitHub Releases automatically on every merge to `main`
 
 ## GitHub-Backed Team Storage
 
@@ -221,6 +222,16 @@ ReqBib extracts useful keywords from each command, including:
 - Other meaningful words in the command
 
 Search is case-insensitive and supports multiple keywords.
+
+## Releases
+
+Pushes to `main` publish a GitHub Release automatically.
+
+- Tags use the format `v<crate-version>-build.<run_number>`
+- Release assets currently include:
+  - `reqbib-x86_64-unknown-linux-gnu.tar.gz`
+  - `reqbib-x86_64-apple-darwin.tar.gz`
+  - matching `.sha256` checksum files
 
 ## Sensitive Data Warning
 
