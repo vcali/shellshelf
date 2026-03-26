@@ -19,10 +19,10 @@ The name comes from **Command Biblioteca**. It intentionally does not include th
 
 ## Quick Start
 
-Install with Homebrew from the latest GitHub release:
+Install with Homebrew:
 
 ```bash
-brew install --formula https://github.com/vcali/reqbib/releases/latest/download/combib.rb
+brew install vcali/tap/combib
 ```
 
 Add a command locally:
@@ -148,8 +148,10 @@ GitHub-backed shared usage requires:
 Pushes to `main` publish a GitHub Release automatically.
 
 - Tags use the format `v<crate-version>-build.<run_number>`
+- The Homebrew tap is `vcali/tap`
+- Automatic tap updates require the `HOMEBREW_TAP_TOKEN` repository secret
 - Release assets currently include:
-  - `combib.rb` for direct Homebrew installs
+  - `combib.rb` for tap publication and manual formula use
   - `combib-x86_64-unknown-linux-gnu.tar.gz`
   - `combib-x86_64-apple-darwin.tar.gz`
   - `combib-aarch64-apple-darwin.tar.gz`

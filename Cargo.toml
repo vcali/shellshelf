@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 description = "CLI for storing, searching, and sharing reusable shell commands"
 license = "MIT"
-repository = "https://github.com/vcali/reqbib"
-homepage = "https://github.com/vcali/reqbib"
+repository = "https://github.com/vcali/combib"
+homepage = "https://github.com/vcali/combib"
 
 [dependencies]
 clap = { version = "4.0", features = ["derive"] }

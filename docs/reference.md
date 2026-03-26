@@ -4,10 +4,10 @@ This document covers configuration, CLI parameters, storage modes, and the curre
 
 ## Installation
 
-Install the latest release with Homebrew:
+Install with Homebrew:
 
 ```bash
-brew install --formula https://github.com/vcali/reqbib/releases/latest/download/combib.rb
+brew install vcali/tap/combib
 ```
 
 ## Storage Modes

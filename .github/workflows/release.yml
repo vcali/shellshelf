@@ -111,6 +111,19 @@ jobs:
             --dist-dir dist \
             --output dist/combib.rb
 
+      - name: Publish Homebrew tap
+        if: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
+        shell: bash
+        env:
+          HOMEBREW_TAP_REPO: vcali/homebrew-tap
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          bash scripts/publish-homebrew-tap.sh \
+            --tap-repo "${HOMEBREW_TAP_REPO}" \
+            --token "${HOMEBREW_TAP_TOKEN}" \
+            --formula dist/combib.rb \
+            --version "${{ needs.metadata.outputs.version }}"
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
