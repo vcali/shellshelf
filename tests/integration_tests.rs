@@ -12,7 +12,7 @@ fn write_path_config(
     config_path: &Path,
     shared_repo: &Path,
     teams_dir: &str,
-    default_biblioteca: Option<&str>,
+    default_shelf: Option<&str>,
     default_team: Option<&str>,
     default_all_teams: Option<bool>,
     default_list_limit: Option<usize>,
@@ -48,10 +48,10 @@ fn write_path_config(
         "shared_repo".to_string(),
         serde_json::Value::Object(shared_repo_value),
     );
-    if let Some(default_biblioteca) = default_biblioteca {
+    if let Some(default_shelf) = default_shelf {
         config.insert(
-            "default_biblioteca".to_string(),
-            serde_json::Value::String(default_biblioteca.to_string()),
+            "default_shelf".to_string(),
+            serde_json::Value::String(default_shelf.to_string()),
         );
     }
     if let Some(default_list_limit) = default_list_limit {
@@ -70,7 +70,7 @@ fn write_path_config(
 
 #[derive(Default)]
 struct GithubConfigOptions<'a> {
-    default_biblioteca: Option<&'a str>,
+    default_shelf: Option<&'a str>,
     default_team: Option<&'a str>,
     default_all_teams: Option<bool>,
     auto_update_repo: Option<bool>,
@@ -126,10 +126,10 @@ fn write_github_config(
         "shared_repo".to_string(),
         serde_json::Value::Object(shared_repo),
     );
-    if let Some(default_biblioteca) = options.default_biblioteca {
+    if let Some(default_shelf) = options.default_shelf {
         config.insert(
-            "default_biblioteca".to_string(),
-            serde_json::Value::String(default_biblioteca.to_string()),
+            "default_shelf".to_string(),
+            serde_json::Value::String(default_shelf.to_string()),
         );
     }
 
@@ -268,36 +268,36 @@ fn write_command_database(path: &Path, commands: &[(&str, Option<&str>)]) {
 
 #[test]
 fn test_help_output() {
-    let mut cmd = Command::cargo_bin("combib").unwrap();
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
     cmd.assert()
         .success()
         .stdout(predicate::str::contains(
-            "A CLI tool for storing and sharing command bibliotecas",
+            "A CLI for storing, searching, and sharing reusable shell commands",
         ))
-        .stdout(predicate::str::contains("Usage: combib"))
-        .stdout(predicate::str::contains("--biblioteca"))
-        .stdout(predicate::str::contains("--list-bibliotecas"))
+        .stdout(predicate::str::contains("Usage: shellshelf"))
+        .stdout(predicate::str::contains("--shelf"))
+        .stdout(predicate::str::contains("--list-shelves"))
         .stdout(predicate::str::contains("--list"))
         .stdout(predicate::str::contains("--import").not());
 }
 
 #[test]
-fn test_add_uses_builtin_default_biblioteca_without_config() {
+fn test_add_uses_builtin_default_shelf_without_config() {
     let temp_dir = TempDir::new().unwrap();
-    let mut cmd = Command::cargo_bin("combib").unwrap();
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
 
     cmd.env("HOME", temp_dir.path())
         .arg("--add")
         .arg("curl https://example.com");
 
     cmd.assert().success().stdout(predicate::str::contains(
-        "Added command to biblioteca 'default': curl https://example.com",
+        "Added command to shelf 'default': curl https://example.com",
     ));
 
     assert!(temp_dir
         .path()
-        .join(".combib")
-        .join("libs")
+        .join(".shellshelf")
+        .join("shelves")
         .join("default.json")
         .exists());
 }
@@ -305,19 +305,19 @@ fn test_add_uses_builtin_default_biblioteca_without_config() {
 #[test]
 fn test_add_command_local() {
     let temp_dir = TempDir::new().unwrap();
-    let mut cmd = Command::cargo_bin("combib").unwrap();
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
 
     cmd.env("HOME", temp_dir.path())
-        .args(["-b", "curl", "--add", "curl https://example.com/test"]);
+        .args(["-s", "curl", "--add", "curl https://example.com/test"]);
 
     cmd.assert().success().stdout(predicate::str::contains(
-        "Added command to biblioteca 'curl': curl https://example.com/test",
+        "Added command to shelf 'curl': curl https://example.com/test",
     ));
 
     let data_file = temp_dir
         .path()
-        .join(".combib")
-        .join("libs")
+        .join(".shellshelf")
+        .join("shelves")
         .join("curl.json");
     assert!(data_file.exists());
 
@@ -326,78 +326,78 @@ fn test_add_command_local() {
 }
 
 #[test]
-fn test_create_local_biblioteca() {
+fn test_create_local_shelf() {
     let temp_dir = TempDir::new().unwrap();
-    let mut cmd = Command::cargo_bin("combib").unwrap();
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
 
     cmd.env("HOME", temp_dir.path())
-        .args(["--create-biblioteca", "git"]);
+        .args(["--create-shelf", "git"]);
 
     cmd.assert()
         .success()
-        .stdout(predicate::str::contains("Created biblioteca 'git'."));
+        .stdout(predicate::str::contains("Created shelf 'git'."));
 
     assert!(temp_dir
         .path()
-        .join(".combib")
-        .join("libs")
+        .join(".shellshelf")
+        .join("shelves")
         .join("git.json")
         .exists());
 }
 
 #[test]
-fn test_create_biblioteca_in_team_repository() {
+fn test_create_shelf_in_team_repository() {
     let temp_dir = TempDir::new().unwrap();
-    let shared_repo = temp_dir.path().join("shared-combib");
-    let mut cmd = Command::cargo_bin("combib").unwrap();
+    let shared_repo = temp_dir.path().join("shared-shellshelf");
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
 
     cmd.env("HOME", temp_dir.path()).args([
         "--repo",
         shared_repo.to_str().unwrap(),
         "--team",
         "platform",
-        "--create-biblioteca",
+        "--create-shelf",
         "aws",
     ]);
 
     cmd.assert().success().stdout(predicate::str::contains(
-        "Created biblioteca 'aws' for team 'platform'.",
+        "Created shelf 'aws' for team 'platform'.",
     ));
 
     assert!(shared_repo
         .join("teams")
         .join("platform")
-        .join("libs")
+        .join("shelves")
         .join("aws.json")
         .exists());
 }
 
 #[test]
-fn test_create_biblioteca_rejects_mismatched_active_biblioteca() {
+fn test_create_shelf_rejects_mismatched_active_shelf() {
     let temp_dir = TempDir::new().unwrap();
-    let mut cmd = Command::cargo_bin("combib").unwrap();
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
 
     cmd.env("HOME", temp_dir.path())
-        .args(["-b", "curl", "--create-biblioteca", "git"]);
+        .args(["-s", "curl", "--create-shelf", "git"]);
 
     cmd.assert().failure().stderr(predicate::str::contains(
-        "--biblioteca must match --create-biblioteca when both are provided.",
+        "--shelf must match --create-shelf when both are provided.",
     ));
 }
 
 #[test]
-fn test_list_local_bibliotecas() {
+fn test_list_local_shelves() {
     let temp_dir = TempDir::new().unwrap();
 
-    for biblioteca in ["curl", "git"] {
-        let mut cmd = Command::cargo_bin("combib").unwrap();
+    for shelf in ["curl", "git"] {
+        let mut cmd = Command::cargo_bin("shellshelf").unwrap();
         cmd.env("HOME", temp_dir.path())
-            .args(["--create-biblioteca", biblioteca]);
+            .args(["--create-shelf", shelf]);
         cmd.assert().success();
     }
 
-    let mut cmd = Command::cargo_bin("combib").unwrap();
-    cmd.env("HOME", temp_dir.path()).arg("--list-bibliotecas");
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", temp_dir.path()).arg("--list-shelves");
 
     cmd.assert()
         .success()
@@ -407,30 +407,30 @@ fn test_list_local_bibliotecas() {
 }
 
 #[test]
-fn test_list_team_bibliotecas() {
+fn test_list_team_shelves() {
     let temp_dir = TempDir::new().unwrap();
-    let shared_repo = temp_dir.path().join("shared-combib");
+    let shared_repo = temp_dir.path().join("shared-shellshelf");
 
-    for biblioteca in ["aws", "curl"] {
-        let mut cmd = Command::cargo_bin("combib").unwrap();
+    for shelf in ["aws", "curl"] {
+        let mut cmd = Command::cargo_bin("shellshelf").unwrap();
         cmd.env("HOME", temp_dir.path()).args([
             "--repo",
             shared_repo.to_str().unwrap(),
             "--team",
             "platform",
-            "--create-biblioteca",
-            biblioteca,
+            "--create-shelf",
+            shelf,
         ]);
         cmd.assert().success();
     }
 
-    let mut cmd = Command::cargo_bin("combib").unwrap();
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
     cmd.env("HOME", temp_dir.path()).args([
         "--repo",
         shared_repo.to_str().unwrap(),
         "--team",
         "platform",
-        "--list-bibliotecas",
+        "--list-shelves",
     ]);
 
     cmd.assert()
@@ -441,29 +441,29 @@ fn test_list_team_bibliotecas() {
 }
 
 #[test]
-fn test_list_all_team_bibliotecas() {
+fn test_list_all_team_shelves() {
     let temp_dir = TempDir::new().unwrap();
-    let shared_repo = temp_dir.path().join("shared-combib");
+    let shared_repo = temp_dir.path().join("shared-shellshelf");
 
-    for (team, biblioteca) in [("payments", "curl"), ("platform", "aws")] {
-        let mut cmd = Command::cargo_bin("combib").unwrap();
+    for (team, shelf) in [("payments", "curl"), ("platform", "aws")] {
+        let mut cmd = Command::cargo_bin("shellshelf").unwrap();
         cmd.env("HOME", temp_dir.path()).args([
             "--repo",
             shared_repo.to_str().unwrap(),
             "--team",
             team,
-            "--create-biblioteca",
-            biblioteca,
+            "--create-shelf",
+            shelf,
         ]);
         cmd.assert().success();
     }
 
-    let mut cmd = Command::cargo_bin("combib").unwrap();
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
     cmd.env("HOME", temp_dir.path()).args([
         "--repo",
         shared_repo.to_str().unwrap(),
         "--all-teams",
-        "--list-bibliotecas",
+        "--list-shelves",
     ]);
 
     cmd.assert()
@@ -475,25 +475,25 @@ fn test_list_all_team_bibliotecas() {
 }
 
 #[test]
-fn test_list_bibliotecas_rejects_biblioteca_flag() {
+fn test_list_shelves_rejects_shelf_flag() {
     let temp_dir = TempDir::new().unwrap();
-    let mut cmd = Command::cargo_bin("combib").unwrap();
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
 
     cmd.env("HOME", temp_dir.path())
-        .args(["-b", "curl", "--list-bibliotecas"]);
+        .args(["-s", "curl", "--list-shelves"]);
 
     cmd.assert().failure().stderr(predicate::str::contains(
-        "--biblioteca cannot be used with --list-bibliotecas.",
+        "--shelf cannot be used with --list-shelves.",
     ));
 }
 
 #[test]
 fn test_add_command_with_description() {
     let temp_dir = TempDir::new().unwrap();
-    let mut cmd = Command::cargo_bin("combib").unwrap();
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
 
     cmd.env("HOME", temp_dir.path()).args([
-        "-b",
+        "-s",
         "curl",
         "--add",
         "curl https://example.com/test",
@@ -502,20 +502,20 @@ fn test_add_command_with_description() {
     ]);
 
     cmd.assert().success().stdout(predicate::str::contains(
-        "Added command to biblioteca 'curl': curl https://example.com/test (Example request)",
+        "Added command to shelf 'curl': curl https://example.com/test (Example request)",
     ));
 }
 
 #[test]
-fn test_list_empty_biblioteca() {
+fn test_list_empty_shelf() {
     let temp_dir = TempDir::new().unwrap();
-    let mut cmd = Command::cargo_bin("combib").unwrap();
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
 
     cmd.env("HOME", temp_dir.path())
-        .args(["-b", "curl", "--list"]);
+        .args(["-s", "curl", "--list"]);
 
     cmd.assert().success().stdout(predicate::str::contains(
-        "No commands stored in biblioteca 'curl'.",
+        "No commands stored in shelf 'curl'.",
     ));
 }
 
@@ -524,14 +524,14 @@ fn test_list_with_commands() {
     let temp_dir = TempDir::new().unwrap();
     let multiline_command = "curl -X POST https://api.example.com/graphql \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"query\":\"{ viewer { login } }\"}'";
 
-    let mut cmd = Command::cargo_bin("combib").unwrap();
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
     cmd.env("HOME", temp_dir.path())
-        .args(["-b", "curl", "--add", multiline_command]);
+        .args(["-s", "curl", "--add", multiline_command]);
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("combib").unwrap();
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
     cmd.env("HOME", temp_dir.path())
-        .args(["-b", "curl", "--list"]);
+        .args(["-s", "curl", "--list"]);
 
     cmd.assert()
         .success()
@@ -551,15 +551,15 @@ fn test_search_commands() {
         "curl https://example.com/test",
         "curl -X POST https://api.github.com/repos",
     ] {
-        let mut cmd = Command::cargo_bin("combib").unwrap();
+        let mut cmd = Command::cargo_bin("shellshelf").unwrap();
         cmd.env("HOME", temp_dir.path())
-            .args(["-b", "curl", "--add", command]);
+            .args(["-s", "curl", "--add", command]);
         cmd.assert().success();
     }
 
-    let mut cmd = Command::cargo_bin("combib").unwrap();
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
     cmd.env("HOME", temp_dir.path())
-        .args(["-b", "curl", "github"]);
+        .args(["-s", "curl", "github"]);
 
     cmd.assert()
         .success()
@@ -572,22 +572,22 @@ fn test_search_commands() {
 #[test]
 fn test_duplicate_prevention() {
     let temp_dir = TempDir::new().unwrap();
-    let mut cmd = Command::cargo_bin("combib").unwrap();
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
 
     cmd.env("HOME", temp_dir.path())
-        .args(["-b", "git", "--add", "git status"]);
+        .args(["-s", "git", "--add", "git status"]);
     cmd.assert().success();
 
-    let mut cmd = Command::cargo_bin("combib").unwrap();
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
     cmd.env("HOME", temp_dir.path())
-        .args(["-b", "git", "--add", "git status"]);
+        .args(["-s", "git", "--add", "git status"]);
     cmd.assert().success().stdout(predicate::str::contains(
-        "Command already exists in biblioteca 'git'.",
+        "Command already exists in shelf 'git'.",
     ));
 
-    let mut cmd = Command::cargo_bin("combib").unwrap();
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
     cmd.env("HOME", temp_dir.path())
-        .args(["-b", "git", "--list"]);
+        .args(["-s", "git", "--list"]);
     cmd.assert()
         .success()
         .stdout(predicate::str::contains("git status"))
@@ -597,15 +597,15 @@ fn test_duplicate_prevention() {
 #[test]
 fn test_add_command_to_team_repository() {
     let temp_dir = TempDir::new().unwrap();
-    let shared_repo = temp_dir.path().join("shared-combib");
-    let mut cmd = Command::cargo_bin("combib").unwrap();
+    let shared_repo = temp_dir.path().join("shared-shellshelf");
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
 
     cmd.env("HOME", temp_dir.path()).args([
         "--repo",
         shared_repo.to_str().unwrap(),
         "--team",
         "platform",
-        "-b",
+        "-s",
         "curl",
         "--add",
         "curl https://api.example.com/platform",
@@ -616,7 +616,7 @@ fn test_add_command_to_team_repository() {
     let data_file = shared_repo
         .join("teams")
         .join("platform")
-        .join("libs")
+        .join("shelves")
         .join("curl.json");
     assert!(data_file.exists());
 }
@@ -624,19 +624,19 @@ fn test_add_command_to_team_repository() {
 #[test]
 fn test_team_repository_storage_is_isolated_per_team() {
     let temp_dir = TempDir::new().unwrap();
-    let shared_repo = temp_dir.path().join("shared-combib");
+    let shared_repo = temp_dir.path().join("shared-shellshelf");
 
     for (team, command) in [
         ("platform", "curl https://api.example.com/platform"),
         ("payments", "curl https://api.example.com/payments"),
     ] {
-        let mut cmd = Command::cargo_bin("combib").unwrap();
+        let mut cmd = Command::cargo_bin("shellshelf").unwrap();
         cmd.env("HOME", temp_dir.path()).args([
             "--repo",
             shared_repo.to_str().unwrap(),
             "--team",
             team,
-            "-b",
+            "-s",
             "curl",
             "--add",
             command,
@@ -644,13 +644,13 @@ fn test_team_repository_storage_is_isolated_per_team() {
         cmd.assert().success();
     }
 
-    let mut cmd = Command::cargo_bin("combib").unwrap();
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
     cmd.env("HOME", temp_dir.path()).args([
         "--repo",
         shared_repo.to_str().unwrap(),
         "--team",
         "platform",
-        "-b",
+        "-s",
         "curl",
         "--list",
     ]);
@@ -661,14 +661,14 @@ fn test_team_repository_storage_is_isolated_per_team() {
 }
 
 #[test]
-fn test_default_team_and_biblioteca_combined_read_hides_duplicates() {
+fn test_default_team_and_shelf_combined_read_hides_duplicates() {
     let temp_dir = TempDir::new().unwrap();
     let home_dir = temp_dir.path();
-    let shared_repo = home_dir.join("shared-combib");
-    let combib_dir = home_dir.join(".combib");
-    let config_path = combib_dir.join("config.json");
+    let shared_repo = home_dir.join("shared-shellshelf");
+    let shellshelf_dir = home_dir.join(".shellshelf");
+    let config_path = shellshelf_dir.join("config.json");
 
-    fs::create_dir_all(&combib_dir).unwrap();
+    fs::create_dir_all(&shellshelf_dir).unwrap();
     write_path_config(
         &config_path,
         &shared_repo,
@@ -680,7 +680,10 @@ fn test_default_team_and_biblioteca_combined_read_hides_duplicates() {
     );
 
     write_command_database(
-        &home_dir.join(".combib").join("libs").join("curl.json"),
+        &home_dir
+            .join(".shellshelf")
+            .join("shelves")
+            .join("curl.json"),
         &[
             (
                 "curl https://shared.example.com/health",
@@ -693,7 +696,7 @@ fn test_default_team_and_biblioteca_combined_read_hides_duplicates() {
         &shared_repo
             .join("teams")
             .join("platform")
-            .join("libs")
+            .join("shelves")
             .join("curl.json"),
         &[(
             "curl https://shared.example.com/health",
@@ -701,7 +704,7 @@ fn test_default_team_and_biblioteca_combined_read_hides_duplicates() {
         )],
     );
 
-    let mut cmd = Command::cargo_bin("combib").unwrap();
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
     cmd.env("HOME", home_dir).arg("--list");
 
     cmd.assert()
@@ -721,11 +724,11 @@ fn test_default_team_and_biblioteca_combined_read_hides_duplicates() {
 fn test_shared_only_requires_default_shared_selection() {
     let temp_dir = TempDir::new().unwrap();
     let home_dir = temp_dir.path();
-    let shared_repo = home_dir.join("shared-combib");
-    let combib_dir = home_dir.join(".combib");
-    let config_path = combib_dir.join("config.json");
+    let shared_repo = home_dir.join("shared-shellshelf");
+    let shellshelf_dir = home_dir.join(".shellshelf");
+    let config_path = shellshelf_dir.join("config.json");
 
-    fs::create_dir_all(&combib_dir).unwrap();
+    fs::create_dir_all(&shellshelf_dir).unwrap();
     write_path_config(
         &config_path,
         &shared_repo,
@@ -736,7 +739,7 @@ fn test_shared_only_requires_default_shared_selection() {
         None,
     );
 
-    let mut cmd = Command::cargo_bin("combib").unwrap();
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
     cmd.env("HOME", home_dir).args(["--shared-only", "--list"]);
 
     cmd.assert().failure().stderr(predicate::str::contains(
@@ -745,15 +748,15 @@ fn test_shared_only_requires_default_shared_selection() {
 }
 
 #[test]
-fn test_all_teams_list_uses_same_biblioteca() {
+fn test_all_teams_list_uses_same_shelf() {
     let temp_dir = TempDir::new().unwrap();
-    let shared_repo = temp_dir.path().join("shared-combib");
+    let shared_repo = temp_dir.path().join("shared-shellshelf");
 
     write_command_database(
         &shared_repo
             .join("teams")
             .join("platform")
-            .join("libs")
+            .join("shelves")
             .join("curl.json"),
         &[("curl https://platform.example.com/health", Some("Platform"))],
     );
@@ -761,17 +764,17 @@ fn test_all_teams_list_uses_same_biblioteca() {
         &shared_repo
             .join("teams")
             .join("payments")
-            .join("libs")
+            .join("shelves")
             .join("curl.json"),
         &[("curl https://payments.example.com/health", Some("Payments"))],
     );
 
-    let mut cmd = Command::cargo_bin("combib").unwrap();
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
     cmd.env("HOME", temp_dir.path()).args([
         "--repo",
         shared_repo.to_str().unwrap(),
         "--all-teams",
-        "-b",
+        "-s",
         "curl",
         "--list",
     ]);
@@ -788,14 +791,14 @@ fn test_all_teams_list_uses_same_biblioteca() {
 fn test_default_list_limit_applies() {
     let temp_dir = TempDir::new().unwrap();
     let home_dir = temp_dir.path();
-    let combib_dir = home_dir.join(".combib");
-    let config_path = combib_dir.join("config.json");
+    let shellshelf_dir = home_dir.join(".shellshelf");
+    let config_path = shellshelf_dir.join("config.json");
 
-    fs::create_dir_all(&combib_dir).unwrap();
+    fs::create_dir_all(&shellshelf_dir).unwrap();
     fs::write(
         &config_path,
         serde_json::to_string_pretty(&serde_json::json!({
-            "default_biblioteca": "curl",
+            "default_shelf": "curl",
             "default_list_limit": 2
         }))
         .unwrap(),
@@ -807,12 +810,12 @@ fn test_default_list_limit_applies() {
         "curl https://two.example.com",
         "curl https://three.example.com",
     ] {
-        let mut cmd = Command::cargo_bin("combib").unwrap();
+        let mut cmd = Command::cargo_bin("shellshelf").unwrap();
         cmd.env("HOME", home_dir).args(["--add", command]);
         cmd.assert().success();
     }
 
-    let mut cmd = Command::cargo_bin("combib").unwrap();
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
     cmd.env("HOME", home_dir).arg("--list");
 
     cmd.assert().success().stdout(predicate::str::contains(
@@ -821,29 +824,29 @@ fn test_default_list_limit_applies() {
 }
 
 #[test]
-fn test_github_mode_bootstraps_checkout_under_combib_directory() {
+fn test_github_mode_bootstraps_checkout_under_shellshelf_directory() {
     let temp_dir = TempDir::new().unwrap();
     let home_dir = temp_dir.path();
-    let combib_dir = home_dir.join(".combib");
-    let config_path = combib_dir.join("config.json");
+    let shellshelf_dir = home_dir.join(".shellshelf");
+    let config_path = shellshelf_dir.join("config.json");
     let (gh_path, gh_log_path) = write_mock_gh(home_dir);
 
-    fs::create_dir_all(&combib_dir).unwrap();
+    fs::create_dir_all(&shellshelf_dir).unwrap();
     write_github_config(
         &config_path,
-        "acme/shared-combib",
+        "acme/shared-shellshelf",
         "teams",
         GithubConfigOptions {
-            default_biblioteca: Some("curl"),
+            default_shelf: Some("curl"),
             default_team: Some("platform"),
             auto_update_repo: Some(false),
             ..GithubConfigOptions::default()
         },
     );
 
-    let mut cmd = Command::cargo_bin("combib").unwrap();
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
     cmd.env("HOME", home_dir)
-        .env("COMBIB_GH_BIN", &gh_path)
+        .env("SHELLSHELF_GH_BIN", &gh_path)
         .args([
             "--team",
             "platform",
@@ -854,40 +857,40 @@ fn test_github_mode_bootstraps_checkout_under_combib_directory() {
     cmd.assert().success();
 
     let checkout_path = home_dir
-        .join(".combib")
+        .join(".shellshelf")
         .join("repos")
-        .join("acme__shared-combib");
+        .join("acme__shared-shellshelf");
     assert!(checkout_path.exists());
     assert!(checkout_path
         .join("teams")
         .join("platform")
-        .join("libs")
+        .join("shelves")
         .join("curl.json")
         .exists());
 
     let gh_args = fs::read_to_string(gh_log_path).unwrap();
     assert!(gh_args.contains("repo"));
     assert!(gh_args.contains("clone"));
-    assert!(gh_args.contains("acme/shared-combib"));
+    assert!(gh_args.contains("acme/shared-shellshelf"));
 }
 
 #[test]
 fn test_github_mode_updates_existing_checkout_when_due() {
     let temp_dir = TempDir::new().unwrap();
     let home_dir = temp_dir.path();
-    let combib_dir = home_dir.join(".combib");
-    let config_path = combib_dir.join("config.json");
-    let checkout_path = combib_dir.join("repos").join("acme__shared-combib");
+    let shellshelf_dir = home_dir.join(".shellshelf");
+    let config_path = shellshelf_dir.join("config.json");
+    let checkout_path = shellshelf_dir.join("repos").join("acme__shared-shellshelf");
     let (git_path, git_log_path) = write_mock_git(home_dir);
 
-    fs::create_dir_all(checkout_path.join("teams").join("platform").join("libs")).unwrap();
-    fs::create_dir_all(&combib_dir).unwrap();
+    fs::create_dir_all(checkout_path.join("teams").join("platform").join("shelves")).unwrap();
+    fs::create_dir_all(&shellshelf_dir).unwrap();
     write_github_config(
         &config_path,
-        "acme/shared-combib",
+        "acme/shared-shellshelf",
         "teams",
         GithubConfigOptions {
-            default_biblioteca: Some("curl"),
+            default_shelf: Some("curl"),
             default_team: Some("platform"),
             auto_update_repo: Some(true),
             auto_update_interval_minutes: Some(15),
@@ -895,9 +898,9 @@ fn test_github_mode_updates_existing_checkout_when_due() {
         },
     );
 
-    let mut cmd = Command::cargo_bin("combib").unwrap();
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
     cmd.env("HOME", home_dir)
-        .env("COMBIB_GIT_BIN", &git_path)
+        .env("SHELLSHELF_GIT_BIN", &git_path)
         .args(["--team", "platform", "--list"]);
 
     cmd.assert().success();

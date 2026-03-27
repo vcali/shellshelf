@@ -54,17 +54,17 @@ trap 'rm -rf "$workdir"' EXIT
 
 git clone "https://x-access-token:${token}@github.com/${tap_repo}.git" "$workdir/repo"
 mkdir -p "$workdir/repo/Formula"
-cp "$formula" "$workdir/repo/Formula/combib.rb"
+cp "$formula" "$workdir/repo/Formula/shellshelf.rb"
 
 cd "$workdir/repo"
 
-if git diff --quiet --exit-code -- Formula/combib.rb; then
+if git diff --quiet --exit-code -- Formula/shellshelf.rb; then
   echo "Homebrew tap already up to date"
   exit 0
 fi
 
 git config user.name "github-actions[bot]"
 git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-git add Formula/combib.rb
-git commit -m "Update combib formula to ${version}"
+git add Formula/shellshelf.rb
+git commit -m "Update shellshelf formula to ${version}"
 git push origin HEAD:main

@@ -30,7 +30,7 @@ jobs:
         run: |
           version=$(awk -F' = ' '/^version = / { gsub(/"/, "", $2); print $2; exit }' Cargo.toml)
           tag_name="v${version}-build.${GITHUB_RUN_NUMBER}"
-          release_name="combib ${version} build ${GITHUB_RUN_NUMBER}"
+          release_name="shellshelf ${version} build ${GITHUB_RUN_NUMBER}"
 
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
           echo "tag_name=${tag_name}" >> "${GITHUB_OUTPUT}"
@@ -46,13 +46,13 @@ jobs:
         include:
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            archive_name: combib-x86_64-unknown-linux-gnu.tar.gz
+            archive_name: shellshelf-x86_64-unknown-linux-gnu.tar.gz
           - os: macos-15-intel
             target: x86_64-apple-darwin
-            archive_name: combib-x86_64-apple-darwin.tar.gz
+            archive_name: shellshelf-x86_64-apple-darwin.tar.gz
           - os: macos-15
             target: aarch64-apple-darwin
-            archive_name: combib-aarch64-apple-darwin.tar.gz
+            archive_name: shellshelf-aarch64-apple-darwin.tar.gz
 
     steps:
       - name: Checkout code
@@ -71,8 +71,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          cp target/release/combib dist/combib
-          tar -C dist -czf "dist/${{ matrix.archive_name }}" combib
+          cp target/release/shellshelf dist/shellshelf
+          tar -C dist -czf "dist/${{ matrix.archive_name }}" shellshelf
           shasum -a 256 "dist/${{ matrix.archive_name }}" > "dist/${{ matrix.archive_name }}.sha256"
 
       - name: Upload packaged artifacts
@@ -109,7 +109,7 @@ jobs:
             --version "${{ needs.metadata.outputs.version }}" \
             --tag "${{ needs.metadata.outputs.tag_name }}" \
             --dist-dir dist \
-            --output dist/combib.rb
+            --output dist/shellshelf.rb
 
       - name: Publish Homebrew tap
         if: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
@@ -121,7 +121,7 @@ jobs:
           bash scripts/publish-homebrew-tap.sh \
             --tap-repo "${HOMEBREW_TAP_REPO}" \
             --token "${HOMEBREW_TAP_TOKEN}" \
-            --formula dist/combib.rb \
+            --formula dist/shellshelf.rb \
             --version "${{ needs.metadata.outputs.version }}"
 
       - name: Create GitHub release

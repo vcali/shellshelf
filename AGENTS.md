@@ -1,7 +1,7 @@
-# AGENTS.md - AI Agent Guidelines for ReqBib
+# AGENTS.md - AI Agent Guidelines for Shellshelf
 
 ## Overview
-This file contains instructions and guidelines for AI agents working on the ReqBib project. All agents should follow these rules when making changes to ensure code quality and consistency.
+This file contains instructions and guidelines for AI agents working on the Shellshelf project. All agents should follow these rules when making changes to ensure code quality and consistency.
 
 ## Project Context and Planning
 

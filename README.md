@@ -1,18 +1,18 @@
-# combib
+# shellshelf
 
-`combib` is a CLI for storing, searching, and sharing reusable shell commands.
+`shellshelf` is a CLI for storing, searching, and sharing reusable shell commands.
 
-The name comes from **Command Biblioteca**. It intentionally does not include the word `library`, to avoid confusion with software/code libraries.
+The name is meant to evoke a shelf of reusable shell commands without borrowing software-library terminology.
 
 ## Highlights
 
-- Store any command in an explicit biblioteca such as `curl`, `git`, `aws`, or `kubectl`
-- Local storage lives under `~/.combib/libs/<biblioteca>.json`
-- Shared storage stays team-based under `<repo>/teams/<team>/libs/<biblioteca>.json`
-- Use `-b` / `--biblioteca` to keep reads and writes scoped and tidy
-- Fall back to a built-in `default` biblioteca when neither CLI nor config selects one
-- Create bibliotecas explicitly with `--create-biblioteca <name>`
-- List available bibliotecas with `--list-bibliotecas`
+- Store any command in an explicit shelf such as `curl`, `git`, `aws`, or `kubectl`
+- Local storage lives under `~/.shellshelf/shelves/<shelf>.json`
+- Shared storage stays team-based under `<repo>/teams/<team>/shelves/<shelf>.json`
+- Use `-s` / `--shelf` to keep reads and writes scoped and tidy
+- Fall back to a built-in `default` shelf when neither CLI nor config selects one
+- Create shelves explicitly with `--create-shelf <name>`
+- List available shelves with `--list-shelves`
 - Search by extracted keywords instead of exact text only
 - Use a shared team repository layout with optional GitHub-backed checkouts
 - No shell-history import by design; commands are intentionally curated to avoid noise
@@ -22,81 +22,81 @@ The name comes from **Command Biblioteca**. It intentionally does not include th
 Install with Homebrew:
 
 ```bash
-brew install vcali/tap/combib
+brew install vcali/tap/shellshelf
 ```
 
 Add a command locally:
 
 ```bash
-combib -b curl -a "curl -I https://api.github.com/users/octocat"
+shellshelf -s curl -a "curl -I https://api.github.com/users/octocat"
 ```
 
 Add a command with a short description:
 
 ```bash
-combib -b git -a "git log --oneline --graph -20" \
+shellshelf -s git -a "git log --oneline --graph -20" \
   --description "Compact recent history graph"
 ```
 
-Search within a biblioteca:
+Search within a shelf:
 
 ```bash
-combib -b curl github octocat
-combib -b aws s3
+shellshelf -s curl github octocat
+shellshelf -s aws s3
 ```
 
-List a biblioteca:
+List a shelf:
 
 ```bash
-combib -b curl -l
+shellshelf -s curl -l
 ```
 
-List available bibliotecas:
+List available shelves:
 
 ```bash
-combib --list-bibliotecas
-combib --repo /path/to/shared-combib --team platform --list-bibliotecas
-combib --repo /path/to/shared-combib --all-teams --list-bibliotecas
+shellshelf --list-shelves
+shellshelf --repo /path/to/shared-shellshelf --team platform --list-shelves
+shellshelf --repo /path/to/shared-shellshelf --all-teams --list-shelves
 ```
 
-If `default_biblioteca` is configured, you can omit `-b` for normal reads and writes. If it is not configured, `combib` falls back to the built-in `default` biblioteca.
+If `default_shelf` is configured, you can omit `-s` for normal reads and writes. If it is not configured, `shellshelf` falls back to the built-in `default` shelf.
 
-Create a biblioteca explicitly:
+Create a shelf explicitly:
 
 ```bash
-combib --create-biblioteca git
-combib --repo /path/to/shared-combib --team platform --create-biblioteca aws
+shellshelf --create-shelf git
+shellshelf --repo /path/to/shared-shellshelf --team platform --create-shelf aws
 ```
 
 ## Team Usage
 
-Shared storage keeps ownership at the team level and organization at the biblioteca level:
+Shared storage keeps ownership at the team level and organization at the shelf level:
 
 ```text
-shared-combib/
+shared-shellshelf/
   teams/
     platform/
-      libs/
+      shelves/
         curl.json
         aws.json
     payments/
-      libs/
+      shelves/
         curl.json
 ```
 
 Basic team-scoped usage:
 
 ```bash
-combib --repo /path/to/shared-combib --team platform -b curl -a \
+shellshelf --repo /path/to/shared-shellshelf --team platform -s curl -a \
   "curl https://api.example.com/platform/health"
 
-combib --repo /path/to/shared-combib --team platform -b curl -l
+shellshelf --repo /path/to/shared-shellshelf --team platform -s curl -l
 ```
 
-Cross-team search within one biblioteca:
+Cross-team search within one shelf:
 
 ```bash
-combib --repo /path/to/shared-combib --all-teams -b curl stripe webhook
+shellshelf --repo /path/to/shared-shellshelf --all-teams -s curl stripe webhook
 ```
 
 Default local-plus-team output is grouped by source:
@@ -120,10 +120,10 @@ Minimal GitHub-backed config:
 
 ```json
 {
-  "default_biblioteca": "curl",
+  "default_shelf": "curl",
   "shared_repo": {
     "mode": "github",
-    "github_repo": "acme/shared-combib",
+    "github_repo": "acme/shared-shellshelf",
     "teams_dir": "teams",
     "default_team": "platform",
     "auto_update_repo": true,
@@ -151,15 +151,15 @@ Pushes to `main` publish a GitHub Release automatically.
 - The Homebrew tap is `vcali/tap`
 - Automatic tap updates require the `HOMEBREW_TAP_TOKEN` repository secret
 - Release assets currently include:
-  - `combib.rb` for tap publication and manual formula use
-  - `combib-x86_64-unknown-linux-gnu.tar.gz`
-  - `combib-x86_64-apple-darwin.tar.gz`
-  - `combib-aarch64-apple-darwin.tar.gz`
+  - `shellshelf.rb` for tap publication and manual formula use
+  - `shellshelf-x86_64-unknown-linux-gnu.tar.gz`
+  - `shellshelf-x86_64-apple-darwin.tar.gz`
+  - `shellshelf-aarch64-apple-darwin.tar.gz`
   - matching `.sha256` checksum files
 
 ## Sensitive Data
 
-`combib` stores commands as provided. If a command contains live tokens, cookies, or other credentials, shared repository mode can expose them to teammates or commit history. Secret detection and redaction are still planned, not implemented.
+`shellshelf` stores commands as provided. If a command contains live tokens, cookies, or other credentials, shared repository mode can expose them to teammates or commit history. Secret detection and redaction are still planned, not implemented.
 
 ## Development
 
@@ -172,5 +172,5 @@ cargo build
 Run locally during development:
 
 ```bash
-cargo run -- -b curl -l
+cargo run -- -s curl -l
 ```

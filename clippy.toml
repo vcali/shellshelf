@@ -1,4 +1,4 @@
-# Clippy configuration for reqbib
+# Clippy configuration for shellshelf
 # See https://doc.rust-lang.org/clippy/configuration.html
 
 # Allow some clippy lints that might be too strict for this project

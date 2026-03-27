@@ -1,3 +1,3 @@
-fn main() -> combib::Result<()> {
-    combib::run()
+fn main() -> shellshelf::Result<()> {
+    shellshelf::run()
 }

@@ -103,13 +103,13 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact-name: combib-linux
+            artifact-name: shellshelf-linux
           # Temporarily disabled Windows builds due to slow performance
           # TODO: Re-enable when we find a faster Windows runner or pre-built image
           # - os: windows-latest
-          #   artifact-name: combib-windows
+          #   artifact-name: shellshelf-windows
           - os: macos-latest
-            artifact-name: combib-macos
+            artifact-name: shellshelf-macos
         
     steps:
     - name: Checkout code
@@ -129,5 +129,5 @@ jobs:
       with:
         name: ${{ matrix.artifact-name }}
         path: |
-          target/release/combib${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+          target/release/shellshelf${{ matrix.os == 'windows-latest' && '.exe' || '' }}
         if-no-files-found: error

@@ -1,4 +1,4 @@
-# combib Reference
+# shellshelf Reference
 
 This document covers configuration, CLI parameters, storage modes, and the current GitHub-backed shared repository workflow.
 
@@ -7,18 +7,18 @@ This document covers configuration, CLI parameters, storage modes, and the curre
 Install with Homebrew:
 
 ```bash
-brew install vcali/tap/combib
+brew install vcali/tap/shellshelf
 ```
 
 ## Storage Modes
 
 ### Local mode
 
-Local storage is biblioteca-based:
+Local storage is shelf-based:
 
 ```text
-~/.combib/
-  libs/
+~/.shellshelf/
+  shelves/
     curl.json
     git.json
     aws.json
@@ -28,17 +28,17 @@ Use local mode when you do not pass `--team` or `--all-teams`.
 
 ### Shared repository mode
 
-Shared mode keeps ownership by team and organization by biblioteca:
+Shared mode keeps ownership by team and organization by shelf:
 
 ```text
-shared-combib/
+shared-shellshelf/
   teams/
     platform/
-      libs/
+      shelves/
         curl.json
         aws.json
     payments/
-      libs/
+      shelves/
         curl.json
 ```
 
@@ -59,23 +59,23 @@ Repository resolution order:
 Default config location:
 
 ```text
-~/.combib/config.json
+~/.shellshelf/config.json
 ```
 
 You can override that with:
 
 ```bash
-combib --config /path/to/config.json ...
+shellshelf --config /path/to/config.json ...
 ```
 
 ### Path mode
 
 ```json
 {
-  "default_biblioteca": "curl",
+  "default_shelf": "curl",
   "shared_repo": {
     "mode": "path",
-    "path": "/Users/alice/src/shared-combib",
+    "path": "/Users/alice/src/shared-shellshelf",
     "teams_dir": "teams"
   }
 }
@@ -85,10 +85,10 @@ combib --config /path/to/config.json ...
 
 ```json
 {
-  "default_biblioteca": "curl",
+  "default_shelf": "curl",
   "shared_repo": {
     "mode": "github",
-    "github_repo": "acme/shared-combib",
+    "github_repo": "acme/shared-shellshelf",
     "teams_dir": "teams",
     "default_team": "platform",
     "auto_update_repo": true,
@@ -100,9 +100,9 @@ combib --config /path/to/config.json ...
 
 Supported top-level keys:
 
-- `default_biblioteca`: optional default biblioteca for normal reads and writes. If omitted, `combib` falls back to the built-in `default` biblioteca
+- `default_shelf`: optional default shelf for normal reads and writes. If omitted, `shellshelf` falls back to the built-in `default` shelf
 - `shared_repo`: shared repository configuration
-- `default_list_limit`: optional default limit for `--list`. `0` means unlimited. If omitted, `combib` defaults to `20`
+- `default_list_limit`: optional default limit for `--list`. `0` means unlimited. If omitted, `shellshelf` defaults to `20`
 
 Supported keys inside `shared_repo`:
 
@@ -120,7 +120,7 @@ Validation rules:
 - `mode = "path"` requires `path` and rejects `github_repo`, `auto_update_repo`, and `auto_update_interval_minutes`
 - `mode = "github"` requires `github_repo` and rejects `path`
 - `default_team` and `default_all_teams = true` cannot be configured together
-- `default_biblioteca` must use the normal biblioteca naming rules
+- `default_shelf` must use the normal shelf naming rules
 - flat legacy config keys such as `github_repo`, `shared_repo_path`, `teams_dir`, and `auto_update_repo` at the top level are rejected
 
 Precedence:
@@ -135,29 +135,29 @@ Precedence:
 
 - `-a`, `--add <COMMAND>`: add a command to the active storage target
 - `--description <TEXT>`: optional brief description for `--add`
-- `-b`, `--biblioteca <NAME>`: active biblioteca
-- `--create-biblioteca <NAME>`: create a new biblioteca in the active local or team-scoped target
-- `--list-bibliotecas`: list available bibliotecas in the active local or shared scope
-- `-l`, `--list`: list commands in the active biblioteca
-- `<keywords...>`: search for commands by keyword in the active biblioteca
+- `-s`, `--shelf <NAME>`: active shelf
+- `--create-shelf <NAME>`: create a new shelf in the active local or team-scoped target
+- `--list-shelves`: list available shelves in the active local or shared scope
+- `-l`, `--list`: list commands in the active shelf
+- `<keywords...>`: search for commands by keyword in the active shelf
 
 ### Shared repository options
 
 - `--repo <PATH>`: path to a shared repository checkout
 - `--team <TEAM>`: target a single team folder
 - `--teams-dir <PATH>`: relative path to the teams directory within the repo
-- `--all-teams`: list or search across every team in the same biblioteca
+- `--all-teams`: list or search across every team in the same shelf
 - `--local-only`: limit default list/search commands to local storage
 - `--shared-only`: limit default list/search commands to shared storage
 - `--limit <COUNT>`: limit how many commands are shown with `--list`. `0` means unlimited
 
 ### Configuration option
 
-- `--config <PATH>`: use a non-default `combib` config file
+- `--config <PATH>`: use a non-default `shellshelf` config file
 
-## Biblioteca Rules
+## Shelf Rules
 
-Biblioteca names may contain only:
+Shelf names may contain only:
 
 - letters
 - numbers
@@ -165,21 +165,21 @@ Biblioteca names may contain only:
 - underscores
 - hyphens
 
-`combib` always resolves an active biblioteca for add, list, and search:
+`shellshelf` always resolves an active shelf for add, list, and search:
 
-- CLI `-b` / `--biblioteca`
-- `default_biblioteca` from config
+- CLI `-s` / `--shelf`
+- `default_shelf` from config
 - built-in fallback: `default`
 
-`--create-biblioteca <NAME>` creates the requested biblioteca file explicitly and exits. If the biblioteca already exists, `combib` reports that and does not overwrite it.
+`--create-shelf <NAME>` creates the requested shelf file explicitly and exits. If the shelf already exists, `shellshelf` reports that and does not overwrite it.
 
-`--list-bibliotecas` does not resolve an active biblioteca. It lists biblioteca names for the selected scope:
+`--list-shelves` does not resolve an active shelf. It lists shelf names for the selected scope:
 
-- no shared flags: local bibliotecas, plus configured default shared scope if one applies
-- `--team <TEAM>`: bibliotecas for that team only
-- `--all-teams`: bibliotecas grouped by team
-- `--local-only`: local bibliotecas only
-- `--shared-only`: shared bibliotecas for the configured default shared scope
+- no shared flags: local shelves, plus configured default shared scope if one applies
+- `--team <TEAM>`: shelves for that team only
+- `--all-teams`: shelves grouped by team
+- `--local-only`: local shelves only
+- `--shared-only`: shared shelves for the configured default shared scope
 
 ## Shared Mode Rules
 
@@ -194,16 +194,16 @@ Biblioteca names may contain only:
 - `--repo` and `--teams-dir` still require `--team` for write commands
 - `--description` can only be used with `--add`
 - `--limit` can only be used with `--list`
-- `--biblioteca` cannot be used with `--list-bibliotecas`
-- `--list-bibliotecas` cannot be combined with `--add`, `--list`, `--create-biblioteca`, `--description`, `--limit`, or search keywords
+- `--shelf` cannot be used with `--list-shelves`
+- `--list-shelves` cannot be combined with `--add`, `--list`, `--create-shelf`, `--description`, `--limit`, or search keywords
 
-Team names follow the same character rules as bibliotecas.
+Team names follow the same character rules as shelves.
 
 The teams directory must be a relative path and cannot contain `.` or `..` components.
 
 ## GitHub Integration
 
-Current GitHub integration is checkout-based. `combib` does not create commits, push changes, or manage authentication on its own.
+Current GitHub integration is checkout-based. `shellshelf` does not create commits, push changes, or manage authentication on its own.
 
 Requirements:
 
@@ -213,14 +213,14 @@ Requirements:
 
 Behavior:
 
-- if `shared_repo.mode` is `github`, `combib` clones into `~/.combib/repos/<owner>__<repo>`
+- if `shared_repo.mode` is `github`, `shellshelf` clones into `~/.shellshelf/repos/<owner>__<repo>`
 - managed checkouts are refreshed with `git pull --ff-only`
 - refresh runs at most once per `auto_update_interval_minutes`
 - set `auto_update_repo` to `false` to disable refresh entirely
 
 ## Search Behavior
 
-`combib` extracts and indexes keywords from:
+`shellshelf` extracts and indexes keywords from:
 
 - domains and subdomains
 - URL path segments
@@ -235,10 +235,10 @@ For non-HTTP commands, keyword extraction falls back to generic tokenization.
 
 ## Output Format
 
-Read results are grouped by source and biblioteca:
+Read results are grouped by source and shelf:
 
-- `Local / <biblioteca>`
-- `Shared / <team> / <biblioteca>`
+- `Local / <shelf>`
+- `Shared / <team> / <shelf>`
 
 Entries are rendered in multiline-safe blocks. If an entry has a description, it is shown after the bracketed index:
 
@@ -255,70 +255,70 @@ curl -X POST https://api.example.com/platform/health \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-When local and shared output are shown together, `combib` hides local entries whose command text exactly matches one of the displayed shared entries. A summary line reports how many local entries were hidden.
+When local and shared output are shown together, `shellshelf` hides local entries whose command text exactly matches one of the displayed shared entries. A summary line reports how many local entries were hidden.
 
-`--list` output is limited by default. `combib` shows the first `20` commands unless `default_list_limit` or `--limit` changes that behavior.
+`--list` output is limited by default. `shellshelf` shows the first `20` commands unless `default_list_limit` or `--limit` changes that behavior.
 
-`--list-bibliotecas` prints one name per line inside source-grouped sections. Team-wide output uses `Shared / <team>` headers because biblioteca names are the payload.
+`--list-shelves` prints one name per line inside source-grouped sections. Team-wide output uses `Shared / <team>` headers because shelf names are the payload.
 
 ## Examples
 
 Local add and search:
 
 ```bash
-combib -b curl -a "curl https://api.github.com/users/octocat"
-combib -b curl -a "curl https://api.github.com/users/octocat" --description "Fetch Octocat profile"
-combib -b curl github octocat
+shellshelf -s curl -a "curl https://api.github.com/users/octocat"
+shellshelf -s curl -a "curl https://api.github.com/users/octocat" --description "Fetch Octocat profile"
+shellshelf -s curl github octocat
 ```
 
-Default biblioteca search when `default_biblioteca` is configured:
+Default shelf search when `default_shelf` is configured:
 
 ```bash
-combib github octocat
+shellshelf github octocat
 ```
 
 Built-in fallback without config:
 
 ```bash
-combib --add "curl https://example.com/health"
-combib -l
+shellshelf --add "curl https://example.com/health"
+shellshelf -l
 ```
 
-Create a biblioteca explicitly:
+Create a shelf explicitly:
 
 ```bash
-combib --create-biblioteca git
-combib --repo /path/to/shared-combib --team platform --create-biblioteca aws
+shellshelf --create-shelf git
+shellshelf --repo /path/to/shared-shellshelf --team platform --create-shelf aws
 ```
 
-List available bibliotecas:
+List available shelves:
 
 ```bash
-combib --list-bibliotecas
-combib --repo /path/to/shared-combib --team platform --list-bibliotecas
-combib --repo /path/to/shared-combib --all-teams --list-bibliotecas
+shellshelf --list-shelves
+shellshelf --repo /path/to/shared-shellshelf --team platform --list-shelves
+shellshelf --repo /path/to/shared-shellshelf --all-teams --list-shelves
 ```
 
 Local-only override:
 
 ```bash
-combib --local-only -b curl health
+shellshelf --local-only -s curl health
 ```
 
 Shared-only override:
 
 ```bash
-combib --shared-only -b curl health
+shellshelf --shared-only -s curl health
 ```
 
 Explicit all-team read:
 
 ```bash
-combib --all-teams -b curl health
+shellshelf --all-teams -s curl health
 ```
 
 Single-team listing:
 
 ```bash
-combib --repo /path/to/shared-combib --team platform -b curl -l
+shellshelf --repo /path/to/shared-shellshelf --team platform -s curl -l
 ```
