@@ -112,7 +112,7 @@ jobs:
             --output dist/shellshelf.rb
 
       - name: Publish Homebrew tap
-        if: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
+        if: ${{ env.HOMEBREW_TAP_TOKEN != '' }}
         shell: bash
         env:
           HOMEBREW_TAP_REPO: vcali/homebrew-tap
