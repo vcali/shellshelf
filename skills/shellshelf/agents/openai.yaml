@@ -1,0 +1,4 @@
+interface:
+  display_name: "shellshelf"
+  short_description: "Search and reuse stored project commands"
+  default_prompt: "Use $shellshelf to find a saved command before inventing one."

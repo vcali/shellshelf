@@ -1,9 +1,9 @@
 use crate::cli::build_cli;
 use crate::config::{
-    list_all_team_bibliotecas, list_local_bibliotecas, list_team_bibliotecas,
-    load_all_team_commands, load_team_commands, resolve_active_biblioteca, resolve_config,
-    resolve_data_file_path, resolve_shared_storage_context, shared_repository_required_message,
-    CombibConfig, DefaultSharedReadTarget, SharedStorageContext,
+    list_all_team_shelves, list_local_shelves, list_team_shelves, load_all_team_commands,
+    load_team_commands, resolve_active_shelf, resolve_config, resolve_data_file_path,
+    resolve_shared_storage_context, shared_repository_required_message, DefaultSharedReadTarget,
+    SharedStorageContext, ShellshelfConfig,
 };
 use crate::database::{CommandDatabase, StoredCommand};
 use crate::Result;
@@ -15,8 +15,8 @@ const DEFAULT_SHARED_SELECTION_REQUIRED_MESSAGE: &str =
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum OutputSectionSource {
-    Local { biblioteca: String },
-    SharedTeam { team: String, biblioteca: String },
+    Local { shelf: String },
+    SharedTeam { team: String, shelf: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,16 +51,16 @@ struct OutputSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct BibliotecaSection {
+struct ShelfSection {
     title: String,
-    bibliotecas: Vec<String>,
+    shelves: Vec<String>,
 }
 
 impl OutputSection {
-    fn local(biblioteca: impl Into<String>, entries: Vec<OutputEntry>) -> Self {
+    fn local(shelf: impl Into<String>, entries: Vec<OutputEntry>) -> Self {
         Self {
             source: OutputSectionSource::Local {
-                biblioteca: biblioteca.into(),
+                shelf: shelf.into(),
             },
             entries,
         }
@@ -68,13 +68,13 @@ impl OutputSection {
 
     fn shared_team(
         team: impl Into<String>,
-        biblioteca: impl Into<String>,
+        shelf: impl Into<String>,
         entries: Vec<OutputEntry>,
     ) -> Self {
         Self {
             source: OutputSectionSource::SharedTeam {
                 team: team.into(),
-                biblioteca: biblioteca.into(),
+                shelf: shelf.into(),
             },
             entries,
         }
@@ -82,9 +82,9 @@ impl OutputSection {
 
     fn title(&self) -> String {
         match &self.source {
-            OutputSectionSource::Local { biblioteca } => format!("Local / {biblioteca}"),
-            OutputSectionSource::SharedTeam { team, biblioteca } => {
-                format!("Shared / {team} / {biblioteca}")
+            OutputSectionSource::Local { shelf } => format!("Local / {shelf}"),
+            OutputSectionSource::SharedTeam { team, shelf } => {
+                format!("Shared / {team} / {shelf}")
             }
         }
     }
@@ -133,39 +133,39 @@ pub fn run() -> Result<()> {
 
     let all_teams = matches.get_flag("all-teams");
     let shared_context = resolve_shared_storage_context(&matches, &config)?;
-    let list_bibliotecas = matches.get_flag("list-bibliotecas");
-    let biblioteca = if list_bibliotecas {
+    let list_shelves = matches.get_flag("list-shelves");
+    let shelf = if list_shelves {
         None
     } else {
-        Some(resolve_target_biblioteca(&matches, &config)?)
+        Some(resolve_target_shelf(&matches, &config)?)
     };
-    let data_file = if let Some(biblioteca) = biblioteca.as_deref() {
+    let data_file = if let Some(shelf) = shelf.as_deref() {
         Some(resolve_data_file_path(
             &matches,
             shared_context.as_ref(),
-            biblioteca,
+            shelf,
         )?)
     } else {
         None
     };
 
-    if list_bibliotecas {
-        return list_bibliotecas_for_scope(&matches, &config, shared_context.as_ref());
+    if list_shelves {
+        return list_shelves_for_scope(&matches, &config, shared_context.as_ref());
     }
 
-    if matches.get_one::<String>("create-biblioteca").is_some() {
-        return create_biblioteca(
+    if matches.get_one::<String>("create-shelf").is_some() {
+        return create_shelf(
             &matches,
             data_file
                 .as_deref()
-                .expect("data file should be resolved for biblioteca creation"),
-            biblioteca
+                .expect("data file should be resolved for shelf creation"),
+            shelf
                 .as_deref()
-                .expect("biblioteca should be resolved for biblioteca creation"),
+                .expect("shelf should be resolved for shelf creation"),
         );
     }
 
-    let biblioteca = biblioteca.expect("biblioteca should be resolved for command operations");
+    let shelf = shelf.expect("shelf should be resolved for command operations");
     let data_file = data_file.expect("data file should be resolved for command operations");
 
     if let Some(command) = matches.get_one::<String>("add") {
@@ -179,14 +179,12 @@ pub fn run() -> Result<()> {
             db.save_to_file(&data_file)?;
             match description {
                 Some(description) => {
-                    println!(
-                        "Added command to biblioteca '{biblioteca}': {command} ({description})"
-                    );
+                    println!("Added command to shelf '{shelf}': {command} ({description})");
                 }
-                None => println!("Added command to biblioteca '{biblioteca}': {command}"),
+                None => println!("Added command to shelf '{shelf}': {command}"),
             }
         } else {
-            println!("Command already exists in biblioteca '{biblioteca}'.");
+            println!("Command already exists in shelf '{shelf}'.");
         }
         return Ok(());
     }
@@ -201,7 +199,7 @@ pub fn run() -> Result<()> {
             let commands = CommandDatabase::load_from_file(&data_file)?;
             let mut sections = vec![OutputSection::shared_team(
                 team.clone(),
-                biblioteca.clone(),
+                shelf.clone(),
                 filter_commands(&commands, list_keywords.as_deref()),
             )];
             let summary = OutputSummary {
@@ -211,7 +209,7 @@ pub fn run() -> Result<()> {
             };
             print_sections(
                 &sections,
-                &empty_message(list_keywords.is_some(), &biblioteca),
+                &empty_message(list_keywords.is_some(), &shelf),
                 &summary,
             );
             return Ok(());
@@ -223,7 +221,7 @@ pub fn run() -> Result<()> {
                     .as_ref()
                     .ok_or(shared_repository_required_message())?,
                 &SharedReadTarget::AllTeams,
-                &biblioteca,
+                &shelf,
                 list_keywords.as_deref(),
             )?;
             let summary = OutputSummary {
@@ -233,7 +231,7 @@ pub fn run() -> Result<()> {
             };
             print_sections(
                 &sections,
-                &empty_message(list_keywords.is_some(), &biblioteca),
+                &empty_message(list_keywords.is_some(), &shelf),
                 &summary,
             );
             return Ok(());
@@ -244,7 +242,7 @@ pub fn run() -> Result<()> {
         let (mut sections, hidden_local_duplicates) = load_default_read_sections(
             &local_db,
             shared_context.as_ref(),
-            &biblioteca,
+            &shelf,
             list_keywords.as_deref(),
             &plan,
         )?;
@@ -256,7 +254,7 @@ pub fn run() -> Result<()> {
         summary.hidden_due_to_limit = apply_list_limit(&mut sections, limit);
         print_sections(
             &sections,
-            &empty_message(list_keywords.is_some(), &biblioteca),
+            &empty_message(list_keywords.is_some(), &shelf),
             &summary,
         );
         return Ok(());
@@ -269,12 +267,12 @@ pub fn run() -> Result<()> {
             let commands = CommandDatabase::load_from_file(&data_file)?;
             let sections = vec![OutputSection::shared_team(
                 team.clone(),
-                biblioteca.clone(),
+                shelf.clone(),
                 filter_commands(&commands, Some(&keyword_vec)),
             )];
             print_sections(
                 &sections,
-                &empty_message(true, &biblioteca),
+                &empty_message(true, &shelf),
                 &OutputSummary::default(),
             );
             return Ok(());
@@ -286,12 +284,12 @@ pub fn run() -> Result<()> {
                     .as_ref()
                     .ok_or(shared_repository_required_message())?,
                 &SharedReadTarget::AllTeams,
-                &biblioteca,
+                &shelf,
                 Some(&keyword_vec),
             )?;
             print_sections(
                 &sections,
-                &empty_message(true, &biblioteca),
+                &empty_message(true, &shelf),
                 &OutputSummary::default(),
             );
             return Ok(());
@@ -302,7 +300,7 @@ pub fn run() -> Result<()> {
         let (sections, hidden_local_duplicates) = load_default_read_sections(
             &local_db,
             shared_context.as_ref(),
-            &biblioteca,
+            &shelf,
             Some(&keyword_vec),
             &plan,
         )?;
@@ -311,7 +309,7 @@ pub fn run() -> Result<()> {
             hidden_due_to_limit: 0,
             active_limit: None,
         };
-        print_sections(&sections, &empty_message(true, &biblioteca), &summary);
+        print_sections(&sections, &empty_message(true, &shelf), &summary);
     }
 
     Ok(())
@@ -344,75 +342,72 @@ fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
         return Err("--description can only be used with --add.".into());
     }
 
-    if matches.get_flag("list-bibliotecas") {
+    if matches.get_flag("list-shelves") {
         if matches.get_one::<String>("add").is_some()
             || matches.get_flag("list")
-            || matches.get_one::<String>("create-biblioteca").is_some()
+            || matches.get_one::<String>("create-shelf").is_some()
         {
             return Err(
-                "--list-bibliotecas cannot be combined with --add, --list, or --create-biblioteca."
-                    .into(),
+                "--list-shelves cannot be combined with --add, --list, or --create-shelf.".into(),
             );
         }
         if matches.get_one::<String>("description").is_some() {
-            return Err("--description cannot be used with --list-bibliotecas.".into());
+            return Err("--description cannot be used with --list-shelves.".into());
         }
         if matches.get_one::<usize>("limit").is_some() {
-            return Err("--limit cannot be used with --list-bibliotecas.".into());
+            return Err("--limit cannot be used with --list-shelves.".into());
         }
-        if matches.get_one::<String>("biblioteca").is_some() {
-            return Err("--biblioteca cannot be used with --list-bibliotecas.".into());
+        if matches.get_one::<String>("shelf").is_some() {
+            return Err("--shelf cannot be used with --list-shelves.".into());
         }
         if matches
             .get_many::<String>("keywords")
             .map(|values| values.len() > 0)
             .unwrap_or(false)
         {
-            return Err("--list-bibliotecas cannot be combined with search keywords.".into());
+            return Err("--list-shelves cannot be combined with search keywords.".into());
         }
     }
 
-    if let Some(create_biblioteca) = matches.get_one::<String>("create-biblioteca") {
+    if let Some(create_shelf) = matches.get_one::<String>("create-shelf") {
         if all_teams {
-            return Err("--all-teams cannot be used with --create-biblioteca.".into());
+            return Err("--all-teams cannot be used with --create-shelf.".into());
         }
         if local_only || shared_only {
             return Err(
-                "--local-only and --shared-only cannot be used with --create-biblioteca.".into(),
+                "--local-only and --shared-only cannot be used with --create-shelf.".into(),
             );
         }
         if matches.get_one::<String>("add").is_some() || matches.get_flag("list") {
-            return Err("--create-biblioteca cannot be combined with --add or --list.".into());
+            return Err("--create-shelf cannot be combined with --add or --list.".into());
         }
         if matches
             .get_many::<String>("keywords")
             .map(|values| values.len() > 0)
             .unwrap_or(false)
         {
-            return Err("--create-biblioteca cannot be combined with search keywords.".into());
+            return Err("--create-shelf cannot be combined with search keywords.".into());
         }
         if matches.get_one::<String>("description").is_some() {
-            return Err("--description cannot be used with --create-biblioteca.".into());
+            return Err("--description cannot be used with --create-shelf.".into());
         }
         if matches.get_one::<usize>("limit").is_some() {
-            return Err("--limit cannot be used with --create-biblioteca.".into());
+            return Err("--limit cannot be used with --create-shelf.".into());
         }
-        if let Some(active_biblioteca) = matches.get_one::<String>("biblioteca") {
-            if active_biblioteca != create_biblioteca {
-                return Err(
-                    "--biblioteca must match --create-biblioteca when both are provided.".into(),
-                );
+        if let Some(active_shelf) = matches.get_one::<String>("shelf") {
+            if active_shelf != create_shelf {
+                return Err("--shelf must match --create-shelf when both are provided.".into());
             }
         }
         if matches.get_one::<String>("repo").is_some()
             && matches.get_one::<String>("team").is_none()
         {
-            return Err("--repo requires --team when creating a shared biblioteca.".into());
+            return Err("--repo requires --team when creating a shared shelf.".into());
         }
         if matches.get_one::<String>("teams-dir").is_some()
             && matches.get_one::<String>("team").is_none()
         {
-            return Err("--teams-dir requires --team when creating a shared biblioteca.".into());
+            return Err("--teams-dir requires --team when creating a shared shelf.".into());
         }
     }
 
@@ -439,59 +434,58 @@ fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
     Ok(())
 }
 
-fn resolve_target_biblioteca(matches: &clap::ArgMatches, config: &CombibConfig) -> Result<String> {
-    if let Some(create_biblioteca) = matches.get_one::<String>("create-biblioteca") {
-        crate::config::validate_biblioteca_name(create_biblioteca)?;
-        Ok(create_biblioteca.clone())
+fn resolve_target_shelf(matches: &clap::ArgMatches, config: &ShellshelfConfig) -> Result<String> {
+    if let Some(create_shelf) = matches.get_one::<String>("create-shelf") {
+        crate::config::validate_shelf_name(create_shelf)?;
+        Ok(create_shelf.clone())
     } else {
-        resolve_active_biblioteca(matches, config)
+        resolve_active_shelf(matches, config)
     }
 }
 
-fn create_biblioteca(
+fn create_shelf(
     matches: &clap::ArgMatches,
     data_file: &std::path::Path,
-    biblioteca: &str,
+    shelf: &str,
 ) -> Result<()> {
     if data_file.exists() {
-        println!("Biblioteca '{biblioteca}' already exists.");
+        println!("Shelf '{shelf}' already exists.");
         return Ok(());
     }
 
     CommandDatabase::new().save_to_file(data_file)?;
 
     if let Some(team) = matches.get_one::<String>("team") {
-        println!("Created biblioteca '{biblioteca}' for team '{team}'.");
+        println!("Created shelf '{shelf}' for team '{team}'.");
     } else {
-        println!("Created biblioteca '{biblioteca}'.");
+        println!("Created shelf '{shelf}'.");
     }
 
     Ok(())
 }
 
-fn list_bibliotecas_for_scope(
+fn list_shelves_for_scope(
     matches: &clap::ArgMatches,
-    config: &CombibConfig,
+    config: &ShellshelfConfig,
     shared_context: Option<&SharedStorageContext>,
 ) -> Result<()> {
     if let Some(team) = matches.get_one::<String>("team") {
         let shared_context = shared_context.ok_or(shared_repository_required_message())?;
-        let sections = vec![BibliotecaSection {
+        let sections = vec![ShelfSection {
             title: format!("Shared / {team}"),
-            bibliotecas: list_team_bibliotecas(shared_context, team)?,
+            shelves: list_team_shelves(shared_context, team)?,
         }];
-        print_biblioteca_sections(
+        print_shelf_sections(
             &sections,
-            &format!("No bibliotecas available for team '{team}'."),
+            &format!("No shelves available for team '{team}'."),
         );
         return Ok(());
     }
 
     if matches.get_flag("all-teams") {
         let shared_context = shared_context.ok_or(shared_repository_required_message())?;
-        let sections =
-            sections_from_grouped_team_bibliotecas(list_all_team_bibliotecas(shared_context)?);
-        print_biblioteca_sections(&sections, "No bibliotecas available in shared storage.");
+        let sections = sections_from_grouped_team_shelves(list_all_team_shelves(shared_context)?);
+        print_shelf_sections(&sections, "No shelves available in shared storage.");
         return Ok(());
     }
 
@@ -499,57 +493,55 @@ fn list_bibliotecas_for_scope(
     let mut sections = Vec::new();
 
     if plan.include_local {
-        sections.push(BibliotecaSection {
+        sections.push(ShelfSection {
             title: "Local".to_string(),
-            bibliotecas: list_local_bibliotecas()?,
+            shelves: list_local_shelves()?,
         });
     }
 
     match plan.shared_target {
         Some(SharedReadTarget::Team(team)) => {
             let shared_context = shared_context.ok_or(shared_repository_required_message())?;
-            sections.push(BibliotecaSection {
+            sections.push(ShelfSection {
                 title: format!("Shared / {team}"),
-                bibliotecas: list_team_bibliotecas(shared_context, &team)?,
+                shelves: list_team_shelves(shared_context, &team)?,
             });
         }
         Some(SharedReadTarget::AllTeams) => {
             let shared_context = shared_context.ok_or(shared_repository_required_message())?;
-            sections.extend(sections_from_grouped_team_bibliotecas(
-                list_all_team_bibliotecas(shared_context)?,
-            ));
+            sections.extend(sections_from_grouped_team_shelves(list_all_team_shelves(
+                shared_context,
+            )?));
         }
         None => {}
     }
 
-    print_biblioteca_sections(&sections, "No bibliotecas available.");
+    print_shelf_sections(&sections, "No shelves available.");
     Ok(())
 }
 
-fn sections_from_grouped_team_bibliotecas(
-    grouped: Vec<(String, String)>,
-) -> Vec<BibliotecaSection> {
+fn sections_from_grouped_team_shelves(grouped: Vec<(String, String)>) -> Vec<ShelfSection> {
     let mut sections = Vec::new();
     let mut current_team = None::<String>;
-    let mut current_bibliotecas = Vec::new();
+    let mut current_shelves = Vec::new();
 
-    for (team, biblioteca) in grouped {
+    for (team, shelf) in grouped {
         if current_team.as_deref() != Some(team.as_str()) {
             if let Some(team_name) = current_team.take() {
-                sections.push(BibliotecaSection {
+                sections.push(ShelfSection {
                     title: format!("Shared / {team_name}"),
-                    bibliotecas: std::mem::take(&mut current_bibliotecas),
+                    shelves: std::mem::take(&mut current_shelves),
                 });
             }
             current_team = Some(team);
         }
-        current_bibliotecas.push(biblioteca);
+        current_shelves.push(shelf);
     }
 
     if let Some(team_name) = current_team {
-        sections.push(BibliotecaSection {
+        sections.push(ShelfSection {
             title: format!("Shared / {team_name}"),
-            bibliotecas: current_bibliotecas,
+            shelves: current_shelves,
         });
     }
 
@@ -573,7 +565,7 @@ fn filter_commands(database: &CommandDatabase, keywords: Option<&[String]>) -> V
 
 fn resolve_default_read_plan(
     matches: &clap::ArgMatches,
-    config: &CombibConfig,
+    config: &ShellshelfConfig,
     shared_context: Option<&SharedStorageContext>,
 ) -> Result<DefaultReadPlan> {
     if matches.get_flag("local-only") {
@@ -611,7 +603,7 @@ fn resolve_default_read_plan(
 fn load_default_read_sections(
     local_db: &CommandDatabase,
     shared_context: Option<&SharedStorageContext>,
-    biblioteca: &str,
+    shelf: &str,
     keywords: Option<&[String]>,
     plan: &DefaultReadPlan,
 ) -> Result<(Vec<OutputSection>, usize)> {
@@ -625,7 +617,7 @@ fn load_default_read_sections(
         Some(target) => load_shared_sections_for_target(
             shared_context.ok_or(shared_repository_required_message())?,
             target,
-            biblioteca,
+            shelf,
             keywords,
         )?,
         None => Vec::new(),
@@ -636,7 +628,7 @@ fn load_default_read_sections(
 
     let mut sections = Vec::new();
     if !local_commands.is_empty() {
-        sections.push(OutputSection::local(biblioteca.to_string(), local_commands));
+        sections.push(OutputSection::local(shelf.to_string(), local_commands));
     }
     sections.extend(shared_sections);
 
@@ -646,31 +638,31 @@ fn load_default_read_sections(
 fn load_shared_sections_for_target(
     shared_context: &SharedStorageContext,
     target: &SharedReadTarget,
-    biblioteca: &str,
+    shelf: &str,
     keywords: Option<&[String]>,
 ) -> Result<Vec<OutputSection>> {
     match target {
         SharedReadTarget::Team(team) => {
-            let commands = load_team_commands(shared_context, team, biblioteca, keywords)?;
+            let commands = load_team_commands(shared_context, team, shelf, keywords)?;
             Ok(vec![OutputSection::shared_team(
                 team.clone(),
-                biblioteca.to_string(),
+                shelf.to_string(),
                 commands
                     .into_iter()
                     .map(OutputEntry::from_owned_command)
                     .collect(),
             )])
         }
-        SharedReadTarget::AllTeams => load_shared_sections(shared_context, biblioteca, keywords),
+        SharedReadTarget::AllTeams => load_shared_sections(shared_context, shelf, keywords),
     }
 }
 
 fn load_shared_sections(
     shared_context: &SharedStorageContext,
-    biblioteca: &str,
+    shelf: &str,
     keywords: Option<&[String]>,
 ) -> Result<Vec<OutputSection>> {
-    let results = load_all_team_commands(shared_context, biblioteca, keywords)?;
+    let results = load_all_team_commands(shared_context, shelf, keywords)?;
     let mut sections = Vec::new();
     let mut current_team = None::<String>;
     let mut current_commands = Vec::new();
@@ -680,7 +672,7 @@ fn load_shared_sections(
             if let Some(team_name) = current_team.take() {
                 sections.push(OutputSection::shared_team(
                     team_name,
-                    biblioteca.to_string(),
+                    shelf.to_string(),
                     std::mem::take(&mut current_commands),
                 ));
             }
@@ -692,7 +684,7 @@ fn load_shared_sections(
     if let Some(team_name) = current_team {
         sections.push(OutputSection::shared_team(
             team_name,
-            biblioteca.to_string(),
+            shelf.to_string(),
             current_commands,
         ));
     }
@@ -719,7 +711,7 @@ fn hide_local_duplicates(
     original_len.saturating_sub(local_commands.len())
 }
 
-fn resolve_list_limit(matches: &clap::ArgMatches, config: &CombibConfig) -> Option<usize> {
+fn resolve_list_limit(matches: &clap::ArgMatches, config: &ShellshelfConfig) -> Option<usize> {
     if let Some(limit) = matches.get_one::<usize>("limit").copied() {
         return normalize_limit(limit);
     }
@@ -763,11 +755,11 @@ fn apply_list_limit(sections: &mut [OutputSection], limit: Option<usize>) -> usi
     hidden
 }
 
-fn empty_message(filtered: bool, biblioteca: &str) -> String {
+fn empty_message(filtered: bool, shelf: &str) -> String {
     if filtered {
-        format!("No matching commands in biblioteca '{biblioteca}'.")
+        format!("No matching commands in shelf '{shelf}'.")
     } else {
-        format!("No commands stored in biblioteca '{biblioteca}'.")
+        format!("No commands stored in shelf '{shelf}'.")
     }
 }
 
@@ -820,10 +812,10 @@ fn print_sections(sections: &[OutputSection], empty_message: &str, summary: &Out
     }
 }
 
-fn print_biblioteca_sections(sections: &[BibliotecaSection], empty_message: &str) {
-    let sections: Vec<&BibliotecaSection> = sections
+fn print_shelf_sections(sections: &[ShelfSection], empty_message: &str) {
+    let sections: Vec<&ShelfSection> = sections
         .iter()
-        .filter(|section| !section.bibliotecas.is_empty())
+        .filter(|section| !section.shelves.is_empty())
         .collect();
 
     if sections.is_empty() {
@@ -839,8 +831,8 @@ fn print_biblioteca_sections(sections: &[BibliotecaSection], empty_message: &str
         println!("{}", format_section_header(&section.title));
         println!();
 
-        for (index, biblioteca) in section.bibliotecas.iter().enumerate() {
-            println!("[{}] {}", index + 1, biblioteca);
+        for (index, shelf) in section.shelves.iter().enumerate() {
+            println!("[{}] {}", index + 1, shelf);
         }
     }
 }

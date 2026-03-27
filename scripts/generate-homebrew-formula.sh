@@ -52,9 +52,9 @@ done
 [ -n "$dist_dir" ] || usage
 [ -n "$output" ] || usage
 
-linux_archive="combib-x86_64-unknown-linux-gnu.tar.gz"
-mac_intel_archive="combib-x86_64-apple-darwin.tar.gz"
-mac_arm_archive="combib-aarch64-apple-darwin.tar.gz"
+linux_archive="shellshelf-x86_64-unknown-linux-gnu.tar.gz"
+mac_intel_archive="shellshelf-x86_64-apple-darwin.tar.gz"
+mac_arm_archive="shellshelf-aarch64-apple-darwin.tar.gz"
 
 sha_from_file() {
   archive="$1"
@@ -75,7 +75,7 @@ mac_arm_sha="$(sha_from_file "$mac_arm_archive")"
 mkdir -p "$(dirname "$output")"
 
 cat > "$output" <<EOF
-class Combib < Formula
+class Shellshelf < Formula
   desc "CLI for storing, searching, and sharing reusable shell commands"
   homepage "https://github.com/$repo"
   version "$version"
@@ -95,11 +95,11 @@ class Combib < Formula
   end
 
   def install
-    bin.install "combib"
+    bin.install "shellshelf"
   end
 
   test do
-    assert_match version.to_s, shell_output("#{bin}/combib --version")
+    assert_match version.to_s, shell_output("#{bin}/shellshelf --version")
   end
 end
 EOF

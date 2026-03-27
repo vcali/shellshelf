@@ -14,8 +14,8 @@ use std::time::Duration;
 
 const SHARED_REPOSITORY_REQUIRED_MESSAGE: &str =
     "No shared repository configured. Use --repo or configure shared_repo in config.";
-const LIBS_DIR_NAME: &str = "libs";
-pub(crate) const BUILTIN_DEFAULT_BIBLIOTECA: &str = "default";
+const SHELVES_DIR_NAME: &str = "shelves";
+pub(crate) const BUILTIN_DEFAULT_SHELF: &str = "default";
 const LEGACY_SHARED_REPO_CONFIG_KEYS: &[&str] = &[
     "github_repo",
     "shared_repo_path",
@@ -25,10 +25,10 @@ const LEGACY_SHARED_REPO_CONFIG_KEYS: &[&str] = &[
 ];
 
 #[derive(Debug, Default, Clone, PartialEq)]
-pub(crate) struct CombibConfig {
+pub(crate) struct ShellshelfConfig {
     pub(crate) shared_repo: Option<SharedRepoConfig>,
     pub(crate) default_list_limit: Option<usize>,
-    pub(crate) default_biblioteca: Option<String>,
+    pub(crate) default_shelf: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -57,11 +57,11 @@ pub(crate) struct GithubSharedRepoConfig {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RawCombibConfig {
+struct RawShellshelfConfig {
     #[serde(default)]
     shared_repo: Option<RawSharedRepoConfig>,
     default_list_limit: Option<usize>,
-    default_biblioteca: Option<String>,
+    default_shelf: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -89,13 +89,13 @@ pub(crate) enum DefaultSharedReadTarget {
     AllTeams,
 }
 
-impl CombibConfig {
+impl ShellshelfConfig {
     pub(crate) fn load_from_file(path: &Path) -> Result<Self> {
         if path.exists() {
             let content = fs::read_to_string(path)?;
             let value: Value = serde_json::from_str(&content)?;
             validate_no_legacy_flat_shared_repo_keys(&value)?;
-            let config: RawCombibConfig = serde_json::from_value(value)?;
+            let config: RawShellshelfConfig = serde_json::from_value(value)?;
             Self::try_from(config)
         } else {
             Ok(Self::default())
@@ -157,23 +157,23 @@ impl GithubSharedRepoConfig {
     }
 }
 
-impl TryFrom<RawCombibConfig> for CombibConfig {
+impl TryFrom<RawShellshelfConfig> for ShellshelfConfig {
     type Error = Box<dyn std::error::Error>;
 
-    fn try_from(value: RawCombibConfig) -> Result<Self> {
+    fn try_from(value: RawShellshelfConfig) -> Result<Self> {
         let shared_repo = match value.shared_repo {
             Some(shared_repo) => Some(SharedRepoConfig::try_from(shared_repo)?),
             None => None,
         };
 
-        if let Some(default_biblioteca) = value.default_biblioteca.as_deref() {
-            validate_biblioteca_name(default_biblioteca)?;
+        if let Some(default_shelf) = value.default_shelf.as_deref() {
+            validate_shelf_name(default_shelf)?;
         }
 
         Ok(Self {
             shared_repo,
             default_list_limit: value.default_list_limit,
-            default_biblioteca: value.default_biblioteca,
+            default_shelf: value.default_shelf,
         })
     }
 }
@@ -299,8 +299,8 @@ pub(crate) fn validate_team_name(team: &str) -> Result<()> {
     validate_slug(team, "Team names")
 }
 
-pub(crate) fn validate_biblioteca_name(biblioteca: &str) -> Result<()> {
-    validate_slug(biblioteca, "Biblioteca names")
+pub(crate) fn validate_shelf_name(shelf: &str) -> Result<()> {
+    validate_slug(shelf, "Shelf names")
 }
 
 fn validate_slug(value: &str, label: &str) -> Result<()> {
@@ -337,40 +337,40 @@ pub(crate) fn validate_relative_directory(label: &str, path: &Path) -> Result<()
     }
 }
 
-pub(crate) fn resolve_active_biblioteca(
+pub(crate) fn resolve_active_shelf(
     matches: &ArgMatches,
-    config: &CombibConfig,
+    config: &ShellshelfConfig,
 ) -> Result<String> {
-    if let Some(biblioteca) = matches.get_one::<String>("biblioteca") {
-        validate_biblioteca_name(biblioteca)?;
-        Ok(biblioteca.clone())
-    } else if let Some(default_biblioteca) = config.default_biblioteca.as_ref() {
-        Ok(default_biblioteca.clone())
+    if let Some(shelf) = matches.get_one::<String>("shelf") {
+        validate_shelf_name(shelf)?;
+        Ok(shelf.clone())
+    } else if let Some(default_shelf) = config.default_shelf.as_ref() {
+        Ok(default_shelf.clone())
     } else {
-        Ok(BUILTIN_DEFAULT_BIBLIOTECA.to_string())
+        Ok(BUILTIN_DEFAULT_SHELF.to_string())
     }
 }
 
-pub(crate) fn get_local_data_file_path(biblioteca: &str) -> Result<PathBuf> {
-    validate_biblioteca_name(biblioteca)?;
+pub(crate) fn get_local_data_file_path(shelf: &str) -> Result<PathBuf> {
+    validate_shelf_name(shelf)?;
 
     let mut path = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    path.push(".combib");
-    path.push(LIBS_DIR_NAME);
-    path.push(format!("{biblioteca}.json"));
+    path.push(".shellshelf");
+    path.push(SHELVES_DIR_NAME);
+    path.push(format!("{shelf}.json"));
     Ok(path)
 }
 
-fn get_local_libs_root() -> PathBuf {
+fn get_local_shelves_root() -> PathBuf {
     let mut path = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    path.push(".combib");
-    path.push(LIBS_DIR_NAME);
+    path.push(".shellshelf");
+    path.push(SHELVES_DIR_NAME);
     path
 }
 
 fn get_default_config_file_path() -> PathBuf {
     let mut path = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    path.push(".combib");
+    path.push(".shellshelf");
     path.push("config.json");
     path
 }
@@ -379,25 +379,25 @@ pub(crate) fn get_team_data_file_path(
     repository_root: &Path,
     teams_dir: &Path,
     team: &str,
-    biblioteca: &str,
+    shelf: &str,
 ) -> Result<PathBuf> {
     validate_team_name(team)?;
-    validate_biblioteca_name(biblioteca)?;
+    validate_shelf_name(shelf)?;
     validate_relative_directory("Teams directory", teams_dir)?;
 
     Ok(repository_root
         .join(teams_dir)
         .join(team)
-        .join(LIBS_DIR_NAME)
-        .join(format!("{biblioteca}.json")))
+        .join(SHELVES_DIR_NAME)
+        .join(format!("{shelf}.json")))
 }
 
-fn list_bibliotecas_in_dir(dir: &Path) -> Result<Vec<String>> {
+fn list_shelves_in_dir(dir: &Path) -> Result<Vec<String>> {
     if !dir.exists() {
         return Ok(Vec::new());
     }
 
-    let mut bibliotecas = Vec::new();
+    let mut shelves = Vec::new();
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         if !entry.file_type()?.is_file() {
@@ -413,26 +413,26 @@ fn list_bibliotecas_in_dir(dir: &Path) -> Result<Vec<String>> {
             continue;
         };
 
-        if validate_biblioteca_name(stem).is_ok() {
-            bibliotecas.push(stem.to_string());
+        if validate_shelf_name(stem).is_ok() {
+            shelves.push(stem.to_string());
         }
     }
 
-    bibliotecas.sort();
-    Ok(bibliotecas)
+    shelves.sort();
+    Ok(shelves)
 }
 
-pub(crate) fn resolve_config(matches: &ArgMatches) -> Result<CombibConfig> {
+pub(crate) fn resolve_config(matches: &ArgMatches) -> Result<ShellshelfConfig> {
     let config_path = matches
         .get_one::<String>("config")
         .map(PathBuf::from)
         .unwrap_or_else(get_default_config_file_path);
-    CombibConfig::load_from_file(&config_path)
+    ShellshelfConfig::load_from_file(&config_path)
 }
 
 pub(crate) fn resolve_shared_storage_context(
     matches: &ArgMatches,
-    config: &CombibConfig,
+    config: &ShellshelfConfig,
 ) -> Result<Option<SharedStorageContext>> {
     let explicit_repo = matches.get_one::<String>("repo").map(PathBuf::from);
     let explicit_teams_dir = matches.get_one::<String>("teams-dir").map(PathBuf::from);
@@ -491,7 +491,7 @@ pub(crate) fn resolve_shared_storage_context(
 pub(crate) fn resolve_data_file_path(
     matches: &ArgMatches,
     shared_context: Option<&SharedStorageContext>,
-    biblioteca: &str,
+    shelf: &str,
 ) -> Result<PathBuf> {
     match matches.get_one::<String>("team") {
         Some(team) => {
@@ -500,31 +500,31 @@ pub(crate) fn resolve_data_file_path(
                 &shared_context.repository_root,
                 &shared_context.teams_dir,
                 team,
-                biblioteca,
+                shelf,
             )
         }
-        None => get_local_data_file_path(biblioteca),
+        None => get_local_data_file_path(shelf),
     }
 }
 
-pub(crate) fn list_local_bibliotecas() -> Result<Vec<String>> {
-    list_bibliotecas_in_dir(&get_local_libs_root())
+pub(crate) fn list_local_shelves() -> Result<Vec<String>> {
+    list_shelves_in_dir(&get_local_shelves_root())
 }
 
-pub(crate) fn list_team_bibliotecas(
+pub(crate) fn list_team_shelves(
     shared_context: &SharedStorageContext,
     team: &str,
 ) -> Result<Vec<String>> {
     validate_team_name(team)?;
-    let libs_dir = shared_context
+    let shelves_dir = shared_context
         .repository_root
         .join(&shared_context.teams_dir)
         .join(team)
-        .join(LIBS_DIR_NAME);
-    list_bibliotecas_in_dir(&libs_dir)
+        .join(SHELVES_DIR_NAME);
+    list_shelves_in_dir(&shelves_dir)
 }
 
-pub(crate) fn list_all_team_bibliotecas(
+pub(crate) fn list_all_team_shelves(
     shared_context: &SharedStorageContext,
 ) -> Result<Vec<(String, String)>> {
     let teams_root = shared_context
@@ -548,8 +548,8 @@ pub(crate) fn list_all_team_bibliotecas(
 
     let mut results = Vec::new();
     for team_name in team_names {
-        for biblioteca in list_team_bibliotecas(shared_context, &team_name)? {
-            results.push((team_name.clone(), biblioteca));
+        for shelf in list_team_shelves(shared_context, &team_name)? {
+            results.push((team_name.clone(), shelf));
         }
     }
 
@@ -558,7 +558,7 @@ pub(crate) fn list_all_team_bibliotecas(
 
 pub(crate) fn load_all_team_commands(
     shared_context: &SharedStorageContext,
-    biblioteca: &str,
+    shelf: &str,
     keywords: Option<&[String]>,
 ) -> Result<Vec<(String, StoredCommand)>> {
     let teams_root = shared_context
@@ -586,7 +586,7 @@ pub(crate) fn load_all_team_commands(
             &shared_context.repository_root,
             &shared_context.teams_dir,
             &team_name,
-            biblioteca,
+            shelf,
         )?;
         let database = CommandDatabase::load_from_file(&team_path)?;
 
@@ -610,14 +610,14 @@ pub(crate) fn load_all_team_commands(
 pub(crate) fn load_team_commands(
     shared_context: &SharedStorageContext,
     team: &str,
-    biblioteca: &str,
+    shelf: &str,
     keywords: Option<&[String]>,
 ) -> Result<Vec<StoredCommand>> {
     let team_path = get_team_data_file_path(
         &shared_context.repository_root,
         &shared_context.teams_dir,
         team,
-        biblioteca,
+        shelf,
     )?;
     let database = CommandDatabase::load_from_file(&team_path)?;
 
@@ -634,11 +634,10 @@ pub(crate) fn shared_repository_required_message() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        get_local_data_file_path, get_team_data_file_path, list_all_team_bibliotecas,
-        list_local_bibliotecas, list_team_bibliotecas, resolve_active_biblioteca,
-        validate_biblioteca_name, validate_relative_directory, CombibConfig,
-        DefaultSharedReadTarget, GithubSharedRepoConfig, PathSharedRepoConfig, SharedRepoConfig,
-        SharedStorageContext, BUILTIN_DEFAULT_BIBLIOTECA,
+        get_local_data_file_path, get_team_data_file_path, list_all_team_shelves,
+        list_local_shelves, list_team_shelves, resolve_active_shelf, validate_relative_directory,
+        validate_shelf_name, DefaultSharedReadTarget, GithubSharedRepoConfig, PathSharedRepoConfig,
+        SharedRepoConfig, SharedStorageContext, ShellshelfConfig, BUILTIN_DEFAULT_SHELF,
     };
     use crate::cli::build_cli;
     use crate::github::DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES;
@@ -657,14 +656,14 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_biblioteca_name() {
-        validate_biblioteca_name("curl").unwrap();
-        validate_biblioteca_name("git-tools").unwrap();
+    fn test_validate_shelf_name() {
+        validate_shelf_name("curl").unwrap();
+        validate_shelf_name("git-tools").unwrap();
 
-        let error = validate_biblioteca_name("../bad").expect_err("invalid biblioteca");
+        let error = validate_shelf_name("../bad").expect_err("invalid shelf");
         assert_eq!(
             error.to_string(),
-            "Biblioteca names may only contain letters, numbers, dots, underscores, and hyphens."
+            "Shelf names may only contain letters, numbers, dots, underscores, and hyphens."
         );
     }
 
@@ -682,13 +681,13 @@ mod tests {
     #[test]
     fn test_get_local_data_file_path() {
         let path = get_local_data_file_path("curl").unwrap();
-        assert!(path.ends_with(".combib/libs/curl.json"));
+        assert!(path.ends_with(".shellshelf/shelves/curl.json"));
     }
 
     #[test]
     fn test_get_team_data_file_path() {
         let team_path = get_team_data_file_path(
-            Path::new("/tmp/shared-combib"),
+            Path::new("/tmp/shared-shellshelf"),
             Path::new("teams"),
             "platform",
             "curl",
@@ -697,26 +696,26 @@ mod tests {
 
         assert_eq!(
             team_path,
-            Path::new("/tmp/shared-combib")
+            Path::new("/tmp/shared-shellshelf")
                 .join("teams")
                 .join("platform")
-                .join("libs")
+                .join("shelves")
                 .join("curl.json")
         );
     }
 
     #[test]
-    fn test_list_local_bibliotecas() {
+    fn test_list_local_shelves() {
         let temp_dir = TempDir::new().unwrap();
         let original_home = std::env::var_os("HOME");
         std::env::set_var("HOME", temp_dir.path());
 
-        fs::create_dir_all(temp_dir.path().join(".combib").join("libs")).unwrap();
+        fs::create_dir_all(temp_dir.path().join(".shellshelf").join("shelves")).unwrap();
         fs::write(
             temp_dir
                 .path()
-                .join(".combib")
-                .join("libs")
+                .join(".shellshelf")
+                .join("shelves")
                 .join("curl.json"),
             "{}",
         )
@@ -724,8 +723,8 @@ mod tests {
         fs::write(
             temp_dir
                 .path()
-                .join(".combib")
-                .join("libs")
+                .join(".shellshelf")
+                .join("shelves")
                 .join("git.json"),
             "{}",
         )
@@ -733,14 +732,14 @@ mod tests {
         fs::write(
             temp_dir
                 .path()
-                .join(".combib")
-                .join("libs")
+                .join(".shellshelf")
+                .join("shelves")
                 .join("README.txt"),
             "",
         )
         .unwrap();
 
-        let bibliotecas = list_local_bibliotecas().unwrap();
+        let shelves = list_local_shelves().unwrap();
 
         if let Some(home) = original_home {
             std::env::set_var("HOME", home);
@@ -748,14 +747,14 @@ mod tests {
             std::env::remove_var("HOME");
         }
 
-        assert_eq!(bibliotecas, vec!["curl".to_string(), "git".to_string()]);
+        assert_eq!(shelves, vec!["curl".to_string(), "git".to_string()]);
     }
 
     #[test]
-    fn test_list_team_bibliotecas() {
+    fn test_list_team_shelves() {
         let temp_dir = TempDir::new().unwrap();
         let shared_context = SharedStorageContext {
-            repository_root: temp_dir.path().join("shared-combib"),
+            repository_root: temp_dir.path().join("shared-shellshelf"),
             teams_dir: PathBuf::from("teams"),
         };
         fs::create_dir_all(
@@ -763,7 +762,7 @@ mod tests {
                 .repository_root
                 .join("teams")
                 .join("platform")
-                .join("libs"),
+                .join("shelves"),
         )
         .unwrap();
         fs::write(
@@ -771,39 +770,39 @@ mod tests {
                 .repository_root
                 .join("teams")
                 .join("platform")
-                .join("libs")
+                .join("shelves")
                 .join("curl.json"),
             "{}",
         )
         .unwrap();
 
-        let bibliotecas = list_team_bibliotecas(&shared_context, "platform").unwrap();
+        let shelves = list_team_shelves(&shared_context, "platform").unwrap();
 
-        assert_eq!(bibliotecas, vec!["curl".to_string()]);
+        assert_eq!(shelves, vec!["curl".to_string()]);
     }
 
     #[test]
-    fn test_list_all_team_bibliotecas() {
+    fn test_list_all_team_shelves() {
         let temp_dir = TempDir::new().unwrap();
         let shared_context = SharedStorageContext {
-            repository_root: temp_dir.path().join("shared-combib"),
+            repository_root: temp_dir.path().join("shared-shellshelf"),
             teams_dir: PathBuf::from("teams"),
         };
 
-        for (team, biblioteca) in [("payments", "curl"), ("platform", "aws")] {
+        for (team, shelf) in [("payments", "curl"), ("platform", "aws")] {
             let dir = shared_context
                 .repository_root
                 .join("teams")
                 .join(team)
-                .join("libs");
+                .join("shelves");
             fs::create_dir_all(&dir).unwrap();
-            fs::write(dir.join(format!("{biblioteca}.json")), "{}").unwrap();
+            fs::write(dir.join(format!("{shelf}.json")), "{}").unwrap();
         }
 
-        let bibliotecas = list_all_team_bibliotecas(&shared_context).unwrap();
+        let shelves = list_all_team_shelves(&shared_context).unwrap();
 
         assert_eq!(
-            bibliotecas,
+            shelves,
             vec![
                 ("payments".to_string(), "curl".to_string()),
                 ("platform".to_string(), "aws".to_string())
@@ -816,39 +815,39 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("missing-config.json");
 
-        let config = CombibConfig::load_from_file(&config_path).unwrap();
+        let config = ShellshelfConfig::load_from_file(&config_path).unwrap();
 
-        assert_eq!(config, CombibConfig::default());
+        assert_eq!(config, ShellshelfConfig::default());
     }
 
     #[test]
-    fn test_load_config_with_path_shared_repo_and_default_biblioteca() {
+    fn test_load_config_with_path_shared_repo_and_default_shelf() {
         let temp_dir = TempDir::new().unwrap();
         let config_path = write_config_file(
             &temp_dir,
             serde_json::json!({
-                "default_biblioteca": "curl",
+                "default_shelf": "curl",
                 "shared_repo": {
                     "mode": "path",
-                    "path": "/tmp/shared-combib",
+                    "path": "/tmp/shared-shellshelf",
                     "teams_dir": "company-teams"
                 }
             }),
         );
 
-        let config = CombibConfig::load_from_file(&config_path).unwrap();
+        let config = ShellshelfConfig::load_from_file(&config_path).unwrap();
 
         assert_eq!(
             config,
-            CombibConfig {
+            ShellshelfConfig {
                 shared_repo: Some(SharedRepoConfig::Path(PathSharedRepoConfig {
-                    path: PathBuf::from("/tmp/shared-combib"),
+                    path: PathBuf::from("/tmp/shared-shellshelf"),
                     teams_dir: Some(PathBuf::from("company-teams")),
                     default_team: None,
                     default_all_teams: false,
                 })),
                 default_list_limit: None,
-                default_biblioteca: Some("curl".to_string()),
+                default_shelf: Some("curl".to_string()),
             }
         );
     }
@@ -861,18 +860,18 @@ mod tests {
             serde_json::json!({
                 "shared_repo": {
                     "mode": "github",
-                    "github_repo": "acme/shared-combib"
+                    "github_repo": "acme/shared-shellshelf"
                 }
             }),
         );
 
-        let config = CombibConfig::load_from_file(&config_path).unwrap();
+        let config = ShellshelfConfig::load_from_file(&config_path).unwrap();
 
         assert_eq!(
             config,
-            CombibConfig {
+            ShellshelfConfig {
                 shared_repo: Some(SharedRepoConfig::Github(GithubSharedRepoConfig {
-                    github_repo: "acme/shared-combib".to_string(),
+                    github_repo: "acme/shared-shellshelf".to_string(),
                     teams_dir: None,
                     auto_update_repo: true,
                     auto_update_interval_minutes: DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES,
@@ -880,7 +879,7 @@ mod tests {
                     default_all_teams: false,
                 })),
                 default_list_limit: None,
-                default_biblioteca: None,
+                default_shelf: None,
             }
         );
     }
@@ -893,13 +892,13 @@ mod tests {
             serde_json::json!({
                 "shared_repo": {
                     "mode": "path",
-                    "path": "/tmp/shared-combib",
+                    "path": "/tmp/shared-shellshelf",
                     "default_team": "platform"
                 }
             }),
         );
 
-        let config = CombibConfig::load_from_file(&config_path).unwrap();
+        let config = ShellshelfConfig::load_from_file(&config_path).unwrap();
 
         assert_eq!(
             config.default_shared_read_target(),
@@ -915,13 +914,13 @@ mod tests {
             serde_json::json!({
                 "shared_repo": {
                     "mode": "path",
-                    "path": "/tmp/shared-combib",
+                    "path": "/tmp/shared-shellshelf",
                     "default_all_teams": true
                 }
             }),
         );
 
-        let config = CombibConfig::load_from_file(&config_path).unwrap();
+        let config = ShellshelfConfig::load_from_file(&config_path).unwrap();
 
         assert_eq!(
             config.default_shared_read_target(),
@@ -935,12 +934,12 @@ mod tests {
         let config_path = write_config_file(
             &temp_dir,
             serde_json::json!({
-                "github_repo": "acme/shared-combib",
+                "github_repo": "acme/shared-shellshelf",
                 "teams_dir": "teams"
             }),
         );
 
-        let error = CombibConfig::load_from_file(&config_path)
+        let error = ShellshelfConfig::load_from_file(&config_path)
             .expect_err("legacy flat config should be rejected");
 
         assert!(error
@@ -949,32 +948,33 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_active_biblioteca_prefers_cli_then_config() {
+    fn test_resolve_active_shelf_prefers_cli_then_config() {
         let matches = build_cli()
-            .try_get_matches_from(["combib", "-b", "git"])
+            .try_get_matches_from(["shellshelf", "-s", "git"])
             .unwrap();
-        let config = CombibConfig {
-            default_biblioteca: Some("curl".to_string()),
-            ..CombibConfig::default()
+        let config = ShellshelfConfig {
+            default_shelf: Some("curl".to_string()),
+            ..ShellshelfConfig::default()
         };
 
-        assert_eq!(resolve_active_biblioteca(&matches, &config).unwrap(), "git");
+        assert_eq!(resolve_active_shelf(&matches, &config).unwrap(), "git");
 
-        let matches = build_cli().try_get_matches_from(["combib", "-l"]).unwrap();
-        assert_eq!(
-            resolve_active_biblioteca(&matches, &config).unwrap(),
-            "curl"
-        );
+        let matches = build_cli()
+            .try_get_matches_from(["shellshelf", "-l"])
+            .unwrap();
+        assert_eq!(resolve_active_shelf(&matches, &config).unwrap(), "curl");
     }
 
     #[test]
-    fn test_resolve_active_biblioteca_falls_back_to_builtin_default() {
-        let matches = build_cli().try_get_matches_from(["combib", "-l"]).unwrap();
-        let config = CombibConfig::default();
+    fn test_resolve_active_shelf_falls_back_to_builtin_default() {
+        let matches = build_cli()
+            .try_get_matches_from(["shellshelf", "-l"])
+            .unwrap();
+        let config = ShellshelfConfig::default();
 
         assert_eq!(
-            resolve_active_biblioteca(&matches, &config).unwrap(),
-            BUILTIN_DEFAULT_BIBLIOTECA
+            resolve_active_shelf(&matches, &config).unwrap(),
+            BUILTIN_DEFAULT_SHELF
         );
     }
 }

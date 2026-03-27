@@ -1,8 +1,8 @@
 use clap::{Arg, Command};
 
 pub(crate) fn build_cli() -> Command {
-    Command::new("combib")
-        .about("A CLI tool for storing and sharing command bibliotecas")
+    Command::new("shellshelf")
+        .about("A CLI for storing, searching, and sharing reusable shell commands")
         .version(env!("CARGO_PKG_VERSION"))
         .arg(
             Arg::new("add")
@@ -18,29 +18,29 @@ pub(crate) fn build_cli() -> Command {
                 .help("Optional brief description for --add"),
         )
         .arg(
-            Arg::new("biblioteca")
-                .short('b')
-                .long("biblioteca")
+            Arg::new("shelf")
+                .short('s')
+                .long("shelf")
                 .value_name("NAME")
-                .help("Active biblioteca name"),
+                .help("Active shelf name"),
         )
         .arg(
-            Arg::new("create-biblioteca")
-                .long("create-biblioteca")
+            Arg::new("create-shelf")
+                .long("create-shelf")
                 .value_name("NAME")
-                .help("Create a new biblioteca"),
+                .help("Create a new shelf"),
         )
         .arg(
             Arg::new("list")
                 .short('l')
                 .long("list")
-                .help("List all stored commands in the active biblioteca")
+                .help("List all stored commands in the active shelf")
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
-            Arg::new("list-bibliotecas")
-                .long("list-bibliotecas")
-                .help("List available bibliotecas in the active scope")
+            Arg::new("list-shelves")
+                .long("list-shelves")
+                .help("List available shelves in the active scope")
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
@@ -54,7 +54,7 @@ pub(crate) fn build_cli() -> Command {
             Arg::new("config")
                 .long("config")
                 .value_name("PATH")
-                .help("Path to a combib config file"),
+                .help("Path to a shellshelf config file"),
         )
         .arg(
             Arg::new("repo")
@@ -94,7 +94,7 @@ pub(crate) fn build_cli() -> Command {
         )
         .arg(
             Arg::new("keywords")
-                .help("Keywords to search for in the active biblioteca")
+                .help("Keywords to search for in the active shelf")
                 .num_args(0..),
         )
 }
