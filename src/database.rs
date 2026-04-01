@@ -77,11 +77,21 @@ impl CommandDatabase {
         }
     }
 
-    pub(crate) fn search(&self, keywords: &[String]) -> Vec<&StoredCommand> {
+    pub(crate) fn search_in_shelf(&self, keywords: &[String], shelf: &str) -> Vec<&StoredCommand> {
+        self.search_with_shelf_context(keywords, Some(shelf))
+    }
+
+    fn search_with_shelf_context(
+        &self,
+        keywords: &[String],
+        shelf: Option<&str>,
+    ) -> Vec<&StoredCommand> {
         let normalized_keywords: Vec<String> = keywords
             .iter()
             .map(|keyword| keyword.to_lowercase())
             .collect();
+        let shelf_lower = shelf.map(str::to_lowercase);
+        let shelf_keywords = shelf.map(extract_keywords).unwrap_or_default();
 
         self.commands
             .iter()
@@ -95,6 +105,10 @@ impl CommandDatabase {
                         || description_lower
                             .as_ref()
                             .is_some_and(|description| description.contains(keyword))
+                        || shelf_lower
+                            .as_ref()
+                            .is_some_and(|shelf_name| shelf_name.contains(keyword))
+                        || shelf_keywords.iter().any(|stored| stored.contains(keyword))
                 })
             })
             .collect()
@@ -165,11 +179,28 @@ mod tests {
             Some("Create repository".to_string()),
         );
 
-        assert_eq!(db.search(&["graph".to_string()]).len(), 1);
-        assert_eq!(db.search(&["bucket".to_string()]).len(), 1);
-        assert_eq!(db.search(&["github".to_string()]).len(), 1);
-        assert_eq!(db.search(&["repository".to_string()]).len(), 1);
-        assert_eq!(db.search(&["nonexistent".to_string()]).len(), 0);
+        assert_eq!(
+            db.search_in_shelf(&["graph".to_string()], "default").len(),
+            1
+        );
+        assert_eq!(
+            db.search_in_shelf(&["bucket".to_string()], "default").len(),
+            1
+        );
+        assert_eq!(
+            db.search_in_shelf(&["github".to_string()], "default").len(),
+            1
+        );
+        assert_eq!(
+            db.search_in_shelf(&["repository".to_string()], "default")
+                .len(),
+            1
+        );
+        assert_eq!(
+            db.search_in_shelf(&["nonexistent".to_string()], "default")
+                .len(),
+            0
+        );
     }
 
     #[test]
@@ -180,9 +211,55 @@ mod tests {
             Some("List artifacts".to_string()),
         );
 
-        assert_eq!(db.search(&["aws".to_string()]).len(), 1);
-        assert_eq!(db.search(&["bucket".to_string()]).len(), 1);
-        assert_eq!(db.search(&["ARTIFACTS".to_string()]).len(), 1);
+        assert_eq!(db.search_in_shelf(&["aws".to_string()], "default").len(), 1);
+        assert_eq!(
+            db.search_in_shelf(&["bucket".to_string()], "default").len(),
+            1
+        );
+        assert_eq!(
+            db.search_in_shelf(&["ARTIFACTS".to_string()], "default")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn test_command_database_search_matches_shelf_name_context() {
+        let mut db = CommandDatabase::new();
+        db.add_command("curl https://example.com/upload".to_string(), None);
+
+        assert_eq!(
+            db.search_in_shelf(&["media".to_string(), "upload".to_string()], "media")
+                .len(),
+            1
+        );
+        assert_eq!(db.search_in_shelf(&["media".to_string()], "media").len(), 1);
+        assert_eq!(
+            db.search_in_shelf(&["payments".to_string(), "upload".to_string()], "media")
+                .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn test_command_database_search_matches_separator_heavy_shelf_names() {
+        let mut db = CommandDatabase::new();
+        db.add_command("curl https://example.com/health".to_string(), None);
+
+        assert_eq!(
+            db.search_in_shelf(&["media".to_string()], "media-tools")
+                .len(),
+            1
+        );
+        assert_eq!(
+            db.search_in_shelf(&["tools".to_string()], "media_tools")
+                .len(),
+            1
+        );
+        assert_eq!(
+            db.search_in_shelf(&["api".to_string()], "media.api").len(),
+            1
+        );
     }
 
     #[test]
@@ -239,7 +316,10 @@ mod tests {
         let mut db = CommandDatabase::new();
         db.add_command("curl https://api.github.com/repositories".to_string(), None);
 
-        assert_eq!(db.search(&["repo".to_string()]).len(), 1);
-        assert_eq!(db.search(&["hub".to_string()]).len(), 1);
+        assert_eq!(
+            db.search_in_shelf(&["repo".to_string()], "default").len(),
+            1
+        );
+        assert_eq!(db.search_in_shelf(&["hub".to_string()], "default").len(), 1);
     }
 }

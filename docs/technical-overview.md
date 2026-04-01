@@ -67,6 +67,7 @@ Current indexing behavior:
 - stored keywords are normalized to lowercase
 - search keywords are normalized once per query
 - fallback substring matching checks the full command text and the optional description
+- shelf names are matched at read time from the current shelf context rather than being persisted on each command record
 - HTTP commands keep protocol-aware indexing, while non-HTTP commands rely on generic tokenization
 
 This is still a simple in-memory scan over JSON-backed records. It is acceptable for the current scale, but larger shared repositories may eventually need a different storage or indexing strategy.

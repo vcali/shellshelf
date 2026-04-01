@@ -226,7 +226,7 @@ pub fn run() -> Result<()> {
             let mut sections = vec![OutputSection::shared_team(
                 team.clone(),
                 shelf.to_string(),
-                filter_commands(&commands, search_keywords.as_deref()),
+                filter_commands(&commands, shelf, search_keywords.as_deref()),
             )];
             let summary = OutputSummary {
                 hidden_due_to_limit: apply_list_limit(&mut sections, limit),
@@ -296,7 +296,7 @@ pub fn run() -> Result<()> {
                 let sections = vec![OutputSection::shared_team(
                     team.clone(),
                     shelf.to_string(),
-                    filter_commands(&commands, Some(keyword_vec)),
+                    filter_commands(&commands, shelf, Some(keyword_vec)),
                 )];
                 print_sections(
                     &sections,
@@ -709,10 +709,14 @@ fn sections_from_grouped_team_shelves(grouped: Vec<(String, String)>) -> Vec<She
     sections
 }
 
-fn filter_commands(database: &CommandDatabase, keywords: Option<&[String]>) -> Vec<OutputEntry> {
+fn filter_commands(
+    database: &CommandDatabase,
+    shelf: &str,
+    keywords: Option<&[String]>,
+) -> Vec<OutputEntry> {
     match keywords {
         Some(keywords) => database
-            .search(keywords)
+            .search_in_shelf(keywords, shelf)
             .into_iter()
             .map(OutputEntry::from_command)
             .collect(),
@@ -769,7 +773,7 @@ fn load_default_read_sections(
     plan: &DefaultReadPlan,
 ) -> Result<(Vec<OutputSection>, usize)> {
     let mut local_commands = if plan.include_local {
-        filter_commands(local_db, keywords)
+        filter_commands(local_db, shelf, keywords)
     } else {
         Vec::new()
     };
@@ -909,8 +913,8 @@ fn load_local_sections_for_all_shelves(keywords: &[String]) -> Result<Vec<Output
         let data_file = get_local_data_file_path(&shelf)?;
         let database = CommandDatabase::load_from_file(&data_file)?;
         sections.push(OutputSection::local(
-            shelf,
-            filter_commands(&database, Some(keywords)),
+            shelf.clone(),
+            filter_commands(&database, &shelf, Some(keywords)),
         ));
     }
 

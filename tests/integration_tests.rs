@@ -601,6 +601,53 @@ fn test_search_without_shelf_scans_all_local_shelves() {
 }
 
 #[test]
+fn test_search_without_shelf_matches_shelf_name_and_command_term() {
+    let temp_dir = TempDir::new().unwrap();
+
+    for (shelf, command) in [
+        ("media", "curl https://example.com/upload"),
+        ("git", "git status"),
+    ] {
+        let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+        cmd.env("HOME", temp_dir.path())
+            .args(["-s", shelf, "--add", command]);
+        cmd.assert().success();
+    }
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", temp_dir.path()).args(["media", "upload"]);
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("=== LOCAL / MEDIA ==="))
+        .stdout(predicate::str::contains("curl https://example.com/upload"))
+        .stdout(predicate::str::contains("=== LOCAL / GIT ===").not());
+}
+
+#[test]
+fn test_search_with_active_shelf_matches_repeated_shelf_name_keyword() {
+    let temp_dir = TempDir::new().unwrap();
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", temp_dir.path()).args([
+        "-s",
+        "media",
+        "--add",
+        "curl https://example.com/upload",
+    ]);
+    cmd.assert().success();
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", temp_dir.path())
+        .args(["-s", "media", "media", "upload"]);
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("=== LOCAL / MEDIA ==="))
+        .stdout(predicate::str::contains("curl https://example.com/upload"));
+}
+
+#[test]
 fn test_team_search_without_shelf_scans_all_team_shelves() {
     let temp_dir = TempDir::new().unwrap();
     let shared_repo = temp_dir.path().join("shared-shellshelf");
@@ -637,6 +684,142 @@ fn test_team_search_without_shelf_scans_all_team_shelves() {
         .stdout(predicate::str::contains("=== SHARED / PLATFORM / GIT ==="))
         .stdout(predicate::str::contains("git deploy platform"))
         .stdout(predicate::str::contains("=== SHARED / PLATFORM / CURL ===").not());
+}
+
+#[test]
+fn test_team_search_without_shelf_matches_shelf_name_only() {
+    let temp_dir = TempDir::new().unwrap();
+    let shared_repo = temp_dir.path().join("shared-shellshelf");
+
+    write_command_database(
+        &shared_repo
+            .join("teams")
+            .join("platform")
+            .join("shelves")
+            .join("media.json"),
+        &[("curl https://example.com/upload", Some("Upload asset"))],
+    );
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", temp_dir.path()).args([
+        "--repo",
+        shared_repo.to_str().unwrap(),
+        "--team",
+        "platform",
+        "media",
+    ]);
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "=== SHARED / PLATFORM / MEDIA ===",
+        ))
+        .stdout(predicate::str::contains("curl https://example.com/upload"));
+}
+
+#[test]
+fn test_all_teams_search_without_shelf_matches_shelf_name_only() {
+    let temp_dir = TempDir::new().unwrap();
+    let shared_repo = temp_dir.path().join("shared-shellshelf");
+
+    write_command_database(
+        &shared_repo
+            .join("teams")
+            .join("platform")
+            .join("shelves")
+            .join("media.json"),
+        &[(
+            "curl https://platform.example.com/upload",
+            Some("Platform upload"),
+        )],
+    );
+    write_command_database(
+        &shared_repo
+            .join("teams")
+            .join("payments")
+            .join("shelves")
+            .join("media.json"),
+        &[(
+            "curl https://payments.example.com/upload",
+            Some("Payments upload"),
+        )],
+    );
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", temp_dir.path()).args([
+        "--repo",
+        shared_repo.to_str().unwrap(),
+        "--all-teams",
+        "media",
+    ]);
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "=== SHARED / PAYMENTS / MEDIA ===",
+        ))
+        .stdout(predicate::str::contains(
+            "=== SHARED / PLATFORM / MEDIA ===",
+        ))
+        .stdout(predicate::str::contains("platform.example.com/upload"))
+        .stdout(predicate::str::contains("payments.example.com/upload"));
+}
+
+#[test]
+fn test_default_combined_search_hides_local_duplicate_when_match_comes_from_shelf_name() {
+    let temp_dir = TempDir::new().unwrap();
+    let home_dir = temp_dir.path();
+    let shared_repo = home_dir.join("shared-shellshelf");
+    let shellshelf_dir = home_dir.join(".shellshelf");
+    let config_path = shellshelf_dir.join("config.json");
+
+    fs::create_dir_all(&shellshelf_dir).unwrap();
+    write_path_config(
+        &config_path,
+        &shared_repo,
+        "teams",
+        None,
+        Some("platform"),
+        None,
+        None,
+    );
+
+    let shared_command = "curl https://cdn.example.com/upload";
+    write_command_database(
+        &home_dir
+            .join(".shellshelf")
+            .join("shelves")
+            .join("media.json"),
+        &[(shared_command, Some("Local shared copy"))],
+    );
+    write_command_database(
+        &shared_repo
+            .join("teams")
+            .join("platform")
+            .join("shelves")
+            .join("media.json"),
+        &[
+            (shared_command, Some("Platform upload")),
+            (
+                "curl https://cdn.example.com/local-only",
+                Some("Shared only"),
+            ),
+        ],
+    );
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", home_dir).args(["media", "upload"]);
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("=== LOCAL / MEDIA ===").not())
+        .stdout(predicate::str::contains(
+            "=== SHARED / PLATFORM / MEDIA ===",
+        ))
+        .stdout(predicate::str::contains("[1] Platform upload"))
+        .stdout(predicate::str::contains(
+            "1 local command was hidden because it duplicates shared storage.",
+        ));
 }
 
 #[test]
