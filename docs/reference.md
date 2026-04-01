@@ -258,8 +258,9 @@ Behavior:
 - header names and values
 - other meaningful words in the command
 - description text
+- shelf names for the shelf currently being evaluated
 
-Search is case-insensitive and supports multiple keywords.
+Search is case-insensitive and supports multiple keywords. Each keyword may match command text, extracted command keywords, description text, or the candidate result's shelf name. Existing AND semantics still apply across the full query.
 
 For non-HTTP commands, keyword extraction falls back to generic tokenization.
 
@@ -305,6 +306,7 @@ Default all-shelf search without `--shelf`:
 
 ```bash
 shellshelf github octocat
+shellshelf media upload
 ```
 
 Built-in fallback without config:

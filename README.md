@@ -14,7 +14,7 @@ The name is meant to evoke a shelf of reusable shell commands without borrowing 
 - Create shelves explicitly with `--create-shelf <name>`
 - Import exported Postman collections with `--import-postman <file>`
 - List available shelves with `--list-shelves`
-- Search by extracted keywords instead of exact text only
+- Search by extracted keywords and shelf names instead of exact text only
 - Use a shared team repository layout with optional GitHub-backed checkouts
 - No shell-history import by design; commands are intentionally curated to avoid noise
 
@@ -44,6 +44,13 @@ Search within a shelf:
 ```bash
 shellshelf -s curl github octocat
 shellshelf -s aws s3
+shellshelf -s media media upload
+```
+
+Search across shelves:
+
+```bash
+shellshelf media upload
 ```
 
 List a shelf:

@@ -592,7 +592,7 @@ pub(crate) fn load_all_team_commands(
 
         match keywords {
             Some(keywords) => {
-                for command in database.search(keywords) {
+                for command in database.search_in_shelf(keywords, shelf) {
                     results.push((team_name.clone(), command.clone()));
                 }
             }
@@ -622,7 +622,11 @@ pub(crate) fn load_team_commands(
     let database = CommandDatabase::load_from_file(&team_path)?;
 
     Ok(match keywords {
-        Some(keywords) => database.search(keywords).into_iter().cloned().collect(),
+        Some(keywords) => database
+            .search_in_shelf(keywords, shelf)
+            .into_iter()
+            .cloned()
+            .collect(),
         None => database.commands,
     })
 }

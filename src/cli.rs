@@ -106,7 +106,7 @@ pub(crate) fn build_cli() -> Command {
         )
         .arg(
             Arg::new("keywords")
-                .help("Keywords to search for in the active shelf")
+                .help("Keywords to search for in the active shelf or across all shelves")
                 .num_args(0..),
         )
 }
