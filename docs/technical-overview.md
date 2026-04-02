@@ -162,7 +162,7 @@ cargo doc --no-deps --document-private-items
 
 ## Release Packaging
 
-The release workflow publishes GitHub release assets for Linux, Intel macOS, and Apple Silicon macOS on every merge to `main`.
+The release workflow publishes GitHub release assets for Linux, Intel macOS, and Apple Silicon macOS when a semver tag in the `v<crate-version>` format is pushed.
 
 Homebrew packaging intentionally splits versioning into:
 
@@ -170,6 +170,8 @@ Homebrew packaging intentionally splits versioning into:
 - Homebrew `revision`, derived from the GitHub Actions run number
 
 That keeps the CLI’s reported version stable until you intentionally bump Cargo semver, while still making each merged release visible to `brew install` and `brew upgrade`.
+
+Because the release workflow builds with `cargo build --locked`, every version bump must include the corresponding `Cargo.lock` update before the tag is created.
 
 ## Known Gaps
 

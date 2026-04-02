@@ -197,6 +197,7 @@ GitHub-backed shared usage requires:
 Create and push a semver tag to publish a GitHub Release automatically.
 
 - Tags use the format `v<crate-version>` and must match `Cargo.toml`
+- Commit the matching `Cargo.lock` update before tagging so `cargo build --locked` succeeds in release CI
 - The Homebrew tap is `vcali/tap`
 - Automatic tap updates require the `HOMEBREW_TAP_TOKEN` repository secret
 - The GitHub release is created before the tap update so published formula URLs are live immediately

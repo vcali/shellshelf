@@ -42,13 +42,13 @@ jobs:
       run: cargo fmt -- --check
 
     - name: Run clippy (linting)
-      run: cargo clippy --all-targets --all-features -- -D warnings
+      run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
     - name: Run tests
-      run: cargo test --verbose --all-features
+      run: cargo test --locked --verbose --all-features
 
     - name: Check documentation
-      run: cargo doc --no-deps --document-private-items
+      run: cargo doc --locked --no-deps --document-private-items
 
   coverage:
     name: Coverage
@@ -122,7 +122,7 @@ jobs:
       uses: Swatinem/rust-cache@v2
 
     - name: Build project
-      run: cargo build --release --verbose
+      run: cargo build --locked --release --verbose
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
