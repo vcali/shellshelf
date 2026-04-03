@@ -27,12 +27,6 @@ Make sure `~/.local/bin` is on your `PATH`.
 
 Default config lives at `~/.shellshelf/config.json`.
 
-Connect a shared GitHub-backed repo once:
-
-```bash
-shellshelf --add-repo https://github.com/acme/shared-shellshelf.git
-```
-
 Search within a shelf or across shelves:
 
 ```bash
@@ -41,6 +35,12 @@ Search within a shelf or across shelves:
 
 [1] Print csv files with awk
 awk -F ',' '{print $2}' <filename>
+```
+
+Connect a shared GitHub-backed repo once:
+
+```bash
+shellshelf --add-repo https://github.com/acme/shared-shellshelf.git
 ```
 
 Search shared team shelves:
