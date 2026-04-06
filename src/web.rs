@@ -543,6 +543,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_app_js_defaults_empty_bodies_to_headers_tab() {
+        let temp_dir = TempDir::new().unwrap();
+        let app = build_test_app(&temp_dir);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/assets/app.js")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let script = String::from_utf8(body.to_vec()).unwrap();
+
+        assert!(script.contains("payload.body_kind === \"empty\" ? \"headers\" : \"response\""));
+    }
+
+    #[tokio::test]
     async fn test_run_route_rejects_non_curl_commands() {
         let temp_dir = TempDir::new().unwrap();
         let app = build_test_app(&temp_dir);
