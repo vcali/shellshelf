@@ -217,7 +217,8 @@ Current behavior:
 Current curl execution constraints in the web interface:
 
 - only commands whose executable is `curl` are runnable
-- commands using output/capture flags that conflict with the web runner, such as `--output`, `--dump-header`, `--include`, `--head`, `--config`, `--write-out`, and related short forms, are rejected
+- commands using output/capture flags that conflict with the web runner, such as `--output`, `--dump-header`, `--include`, `--config`, `--write-out`, and related short forms, are rejected
+- `curl -I` / `curl --head` requests are supported and run as `HEAD` requests in the workbench
 - non-curl commands remain browseable and saveable but are marked non-runnable
 
 ## Shelf Rules

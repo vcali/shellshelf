@@ -13,8 +13,6 @@ const FORBIDDEN_OPTIONS: &[&str] = &[
     "--dump-header",
     "-i",
     "--include",
-    "-I",
-    "--head",
     "-K",
     "--config",
     "-o",
@@ -198,8 +196,13 @@ pub(crate) async fn run_curl_command(
     let content_type = header_value(&headers, "content-type").map(normalize_content_type);
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
 
+    let body_bytes = if request.method.eq_ignore_ascii_case("HEAD") {
+        &[][..]
+    } else {
+        body_bytes.as_slice()
+    };
     let (body_kind, body_text, body_note, preview_url) =
-        build_body_representation(run_store, &body_bytes, content_type.as_deref());
+        build_body_representation(run_store, body_bytes, content_type.as_deref());
 
     Ok(CurlRunResponse {
         exit_code,
@@ -604,6 +607,13 @@ mod tests {
     }
 
     #[test]
+    fn test_analyze_command_allows_head_requests() {
+        let analysis = analyze_command("curl -I https://example.com");
+        assert!(analysis.runnable);
+        assert!(analysis.unsupported_reason.is_none());
+    }
+
+    #[test]
     fn test_parse_last_response_headers_uses_last_block() {
         let headers = parse_last_response_headers(
             b"HTTP/1.1 301 Moved Permanently\r\nLocation: /next\r\n\r\nHTTP/1.1 200 OK\r\nContent-Type: image/gif\r\nCache-Control: max-age=60\r\n\r\n",
@@ -772,6 +782,32 @@ mod tests {
         assert!(response.success);
         assert_eq!(response.body_kind, ResponseBodyKind::Image);
         assert!(response.preview_url.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_run_curl_command_supports_head_requests() {
+        async fn handler() -> impl axum::response::IntoResponse {
+            ([("content-type", "text/plain")], "hello from shellshelf")
+        }
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, Router::new().route("/", get(handler)))
+                .await
+                .unwrap();
+        });
+
+        let run_store = RunStore::default();
+        let response = run_curl_command(&format!("curl -I http://{address}/"), &run_store)
+            .await
+            .unwrap();
+
+        assert!(response.success);
+        assert_eq!(response.request.method, "HEAD");
+        assert_eq!(response.http_status, Some(200));
+        assert_eq!(response.body_kind, ResponseBodyKind::Empty);
+        assert!(response.body_text.is_none());
     }
 
     #[test]

@@ -465,6 +465,7 @@ async function runCommand() {
 }
 
 function renderResponse(payload) {
+  const defaultTab = payload.body_kind === "empty" ? "headers" : "response";
   requestMethod.textContent = payload.request?.method || "-";
   requestUrl.textContent = payload.request?.url || "-";
   responseTitle.textContent = payload.success ? "Run Output" : "Run Output";
@@ -475,7 +476,7 @@ function renderResponse(payload) {
   renderHeaders(requestHeadersOutput, payload.request?.headers || [], "No explicit request headers in command.");
   renderHeaders(responseHeadersOutput, payload.headers || [], "No response headers captured yet.");
   stderrOutput.textContent = payload.stderr || "-";
-  setActiveTab("response");
+  setActiveTab(defaultTab);
 
   if (payload.body_kind === "image" && payload.preview_url) {
     responsePreview.className = "response-preview";
