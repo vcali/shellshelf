@@ -697,6 +697,7 @@ mod tests {
             shared_context: Some(SharedStorageContext {
                 repository_root: temp_dir.path().join("shared-repo"),
                 teams_dir: PathBuf::from("teams"),
+                is_managed_github_checkout: false,
             }),
             run_store: Arc::new(crate::curl_runner::RunStore::default()),
             theme: WebTheme::SolarizedDark,

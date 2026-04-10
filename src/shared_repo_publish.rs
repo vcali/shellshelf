@@ -55,7 +55,10 @@ pub(crate) fn prepare_publish_branch(
     }
 
     let upstream_base = format!("origin/{base_branch}");
-    run_git(repo_root, ["rebase", upstream_base.as_str()])?;
+    if let Err(error) = run_git(repo_root, ["rebase", upstream_base.as_str()]) {
+        let _ = run_git(repo_root, ["rebase", "--abort"]);
+        return Err(error);
+    }
 
     Ok(PreparedPublishBranch {
         base_branch,
@@ -147,6 +150,22 @@ pub(crate) fn sanitize_branch_component(value: &str) -> String {
     }
 }
 
+pub(crate) fn restore_managed_checkout_to_base_branch(
+    repo_root: &Path,
+    base_branch: &str,
+) -> Result<()> {
+    if current_branch(repo_root)? == base_branch {
+        return Ok(());
+    }
+
+    switch_to_branch(repo_root, base_branch).map_err(|error| {
+        format!(
+            "Failed to restore the managed shared checkout to base branch '{base_branch}': {error}"
+        )
+        .into()
+    })
+}
+
 fn validate_branch_input<'a>(value: &'a str, source: &str) -> Result<&'a str> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -203,6 +222,20 @@ fn local_branch_exists(repo_root: &Path, branch: &str) -> Result<bool> {
         ["show-ref", "--verify", "--quiet", branch_ref.as_str()],
     )?
     .success())
+}
+
+fn switch_to_branch(repo_root: &Path, branch: &str) -> Result<()> {
+    if local_branch_exists(repo_root, branch)? {
+        run_git(repo_root, ["switch", branch])?;
+    } else {
+        let upstream_branch = format!("origin/{branch}");
+        run_git(
+            repo_root,
+            ["switch", "-c", branch, "--track", upstream_branch.as_str()],
+        )?;
+    }
+
+    Ok(())
 }
 
 fn paths_have_changes(repo_root: &Path, changed_paths: &[PathBuf]) -> Result<bool> {

@@ -1,8 +1,9 @@
 use crate::Result;
 use std::env;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command as ProcessCommand;
+use std::process::{Command as ProcessCommand, ExitStatus, Output};
 use std::time::{Duration, SystemTime};
 
 pub(crate) const DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES: u64 = 15;
@@ -109,25 +110,15 @@ fn clone_github_repo(github_repo: &str, checkout_path: &Path) -> Result<()> {
 }
 
 fn pull_github_repo(checkout_path: &Path) -> Result<()> {
-    let git_binary = env::var("SHELLSHELF_GIT_BIN").unwrap_or_else(|_| "git".to_string());
-    let output = ProcessCommand::new(&git_binary)
-        .arg("-C")
-        .arg(checkout_path)
-        .arg("pull")
-        .arg("--ff-only")
-        .output()
-        .map_err(|error| {
-            format!(
-                "Failed to execute '{git_binary}'. Automatic repository updates require Git to be installed: {error}"
-            )
-        })?;
+    let base_branch = detect_default_base_branch(checkout_path)?;
+    switch_to_branch(checkout_path, &base_branch)?;
 
-    if output.status.success() {
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!("git pull --ff-only failed: {}", stderr.trim()).into())
-    }
+    run_git(
+        checkout_path,
+        ["pull", "--ff-only", "origin", base_branch.as_str()],
+        "Automatic repository updates require Git to be installed.",
+    )
+    .map(|_| ())
 }
 
 fn should_auto_update_repo(sync_stamp_path: &Path, auto_update_interval: Duration) -> bool {
@@ -215,6 +206,120 @@ where
 pub(crate) fn ensure_github_repo_checkout(github_repo: &str) -> Result<(PathBuf, bool)> {
     let checkout_root = get_default_github_checkout_root();
     ensure_github_repo_checkout_with_runner(github_repo, &checkout_root, clone_github_repo)
+}
+
+fn detect_default_base_branch(checkout_path: &Path) -> Result<String> {
+    if let Ok(symbolic_ref) = run_git(
+        checkout_path,
+        ["symbolic-ref", "refs/remotes/origin/HEAD"],
+        "Automatic repository updates require Git to be installed.",
+    ) {
+        let trimmed = symbolic_ref.trim();
+        if let Some(branch) = trimmed.strip_prefix("refs/remotes/origin/") {
+            return Ok(branch.to_string());
+        }
+    }
+
+    for branch in ["main", "master"] {
+        let remote_ref = format!("refs/remotes/origin/{branch}");
+        if git_exit_status(
+            checkout_path,
+            ["show-ref", "--verify", "--quiet", remote_ref.as_str()],
+            "Automatic repository updates require Git to be installed.",
+        )?
+        .success()
+        {
+            return Ok(branch.to_string());
+        }
+    }
+
+    Err("Could not determine the managed checkout base branch.".into())
+}
+
+fn current_branch(checkout_path: &Path) -> Result<String> {
+    Ok(run_git(
+        checkout_path,
+        ["branch", "--show-current"],
+        "Automatic repository updates require Git to be installed.",
+    )?
+    .trim()
+    .to_string())
+}
+
+fn local_branch_exists(checkout_path: &Path, branch: &str) -> Result<bool> {
+    let branch_ref = format!("refs/heads/{branch}");
+    Ok(git_exit_status(
+        checkout_path,
+        ["show-ref", "--verify", "--quiet", branch_ref.as_str()],
+        "Automatic repository updates require Git to be installed.",
+    )?
+    .success())
+}
+
+fn switch_to_branch(checkout_path: &Path, branch: &str) -> Result<()> {
+    if current_branch(checkout_path)? == branch {
+        return Ok(());
+    }
+
+    if local_branch_exists(checkout_path, branch)? {
+        run_git(
+            checkout_path,
+            ["switch", branch],
+            "Automatic repository updates require Git to be installed.",
+        )?;
+    } else {
+        let upstream_branch = format!("origin/{branch}");
+        run_git(
+            checkout_path,
+            ["switch", "-c", branch, "--track", upstream_branch.as_str()],
+            "Automatic repository updates require Git to be installed.",
+        )?;
+    }
+
+    Ok(())
+}
+
+fn run_git(
+    checkout_path: &Path,
+    args: impl IntoIterator<Item = impl AsRef<OsStr>>,
+    install_message: &str,
+) -> Result<String> {
+    let output = run_git_output(checkout_path, args, install_message)?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("git failed: {}", stderr.trim()).into())
+    }
+}
+
+fn git_exit_status(
+    checkout_path: &Path,
+    args: impl IntoIterator<Item = impl AsRef<OsStr>>,
+    install_message: &str,
+) -> Result<ExitStatus> {
+    Ok(run_git_output(checkout_path, args, install_message)?.status)
+}
+
+fn run_git_output(
+    checkout_path: &Path,
+    args: impl IntoIterator<Item = impl AsRef<OsStr>>,
+    install_message: &str,
+) -> Result<Output> {
+    let git_binary = env::var("SHELLSHELF_GIT_BIN").unwrap_or_else(|_| "git".to_string());
+    let args: Vec<OsString> = args
+        .into_iter()
+        .map(|arg| arg.as_ref().to_os_string())
+        .collect();
+
+    ProcessCommand::new(&git_binary)
+        .arg("-C")
+        .arg(checkout_path)
+        .args(&args)
+        .output()
+        .map_err(|error| {
+            format!("Failed to execute '{git_binary}'. {install_message} {error}").into()
+        })
 }
 
 #[cfg(test)]

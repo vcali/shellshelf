@@ -152,14 +152,14 @@ fn write_mock_gh(temp_dir: &Path) -> (PathBuf, PathBuf) {
         format!(
             "@echo off\r\n\
 setlocal\r\n\
-echo %* > \"{}\"\r\n\
+echo %*>> \"{}\"\r\n\
 mkdir \"%4\" >nul 2>nul\r\n",
             log_path.display()
         )
     } else {
         format!(
             "#!/bin/sh\n\
-printf '%s\\n' \"$@\" > \"{}\"\n\
+printf '%s\\n' \"$@\" >> \"{}\"\n\
 mkdir -p \"$4\"\n",
             log_path.display()
         )
@@ -188,14 +188,77 @@ fn write_mock_git(temp_dir: &Path) -> (PathBuf, PathBuf) {
     let script = if cfg!(windows) {
         format!(
             "@echo off\r\n\
-setlocal\r\n\
-echo %* > \"{}\"\r\n",
+setlocal EnableDelayedExpansion\r\n\
+echo %*>> \"{}\"\r\n\
+set ARG1=%1\r\n\
+set ARG2=%2\r\n\
+set ARG3=%3\r\n\
+set ARG4=%4\r\n\
+if /I \"%ARG1%\"==\"-C\" (\r\n\
+  set ARG1=%3\r\n\
+  set ARG2=%4\r\n\
+  set ARG3=%5\r\n\
+  set ARG4=%6\r\n\
+)\r\n\
+if /I \"%ARG1%\"==\"symbolic-ref\" (\r\n\
+  echo %SHELLSHELF_TEST_GIT_REMOTE_HEAD%\r\n\
+  exit /b 0\r\n\
+)\r\n\
+if /I \"%ARG1%\"==\"branch\" (\r\n\
+  echo %SHELLSHELF_TEST_GIT_CURRENT_BRANCH%\r\n\
+  exit /b 0\r\n\
+)\r\n\
+if /I \"%ARG1%\"==\"show-ref\" (\r\n\
+  set REF=%ARG4%\r\n\
+  if /I \"!REF:~0,11!\"==\"refs/heads/\" (\r\n\
+    set BRANCH=!REF:~11!\r\n\
+    echo ,%SHELLSHELF_TEST_GIT_LOCAL_BRANCHES%, | findstr /C:\",!BRANCH!,\" >nul && exit /b 0\r\n\
+    exit /b 1\r\n\
+  )\r\n\
+  if /I \"!REF:~0,20!\"==\"refs/remotes/origin/\" (\r\n\
+    set BRANCH=!REF:~20!\r\n\
+    echo ,%SHELLSHELF_TEST_GIT_REMOTE_BRANCHES%, | findstr /C:\",!BRANCH!,\" >nul && exit /b 0\r\n\
+    exit /b 1\r\n\
+  )\r\n\
+)\r\n",
             log_path.display()
         )
     } else {
         format!(
             "#!/bin/sh\n\
-printf '%s\\n' \"$@\" > \"{}\"\n",
+printf '%s\\n' \"$@\" >> \"{}\"\n\
+if [ \"$1\" = \"-C\" ]; then\n\
+  shift 2\n\
+fi\n\
+case \"$1\" in\n\
+  symbolic-ref)\n\
+    printf '%s\\n' \"${{SHELLSHELF_TEST_GIT_REMOTE_HEAD:-refs/remotes/origin/main}}\"\n\
+    exit 0\n\
+    ;;\n\
+  branch)\n\
+    printf '%s\\n' \"${{SHELLSHELF_TEST_GIT_CURRENT_BRANCH:-main}}\"\n\
+    exit 0\n\
+    ;;\n\
+  show-ref)\n\
+    ref=\"$4\"\n\
+    case \"$ref\" in\n\
+      refs/heads/*)\n\
+        branch=\"${{ref#refs/heads/}}\"\n\
+        case \",${{SHELLSHELF_TEST_GIT_LOCAL_BRANCHES:-main}},\" in\n\
+          *,\"$branch\",*) exit 0 ;;\n\
+          *) exit 1 ;;\n\
+        esac\n\
+        ;;\n\
+      refs/remotes/origin/*)\n\
+        branch=\"${{ref#refs/remotes/origin/}}\"\n\
+        case \",${{SHELLSHELF_TEST_GIT_REMOTE_BRANCHES:-main}},\" in\n\
+          *,\"$branch\",*) exit 0 ;;\n\
+          *) exit 1 ;;\n\
+        esac\n\
+        ;;\n\
+    esac\n\
+    ;;\n\
+esac\n",
             log_path.display()
         )
     };
@@ -330,7 +393,11 @@ fn write_publish_mock_gh(temp_dir: &Path) -> (PathBuf, PathBuf) {
             "@echo off\r\n\
 setlocal\r\n\
 echo %*>> \"{}\"\r\n\
-if \"%1\"==\"pr\" echo %SHELLSHELF_TEST_GH_PR_URL%\r\n",
+if \"%1\"==\"pr\" (\r\n\
+  if not \"%SHELLSHELF_TEST_GH_PR_URL%\"==\"\" echo %SHELLSHELF_TEST_GH_PR_URL%\r\n\
+  if not \"%SHELLSHELF_TEST_GH_STDERR%\"==\"\" echo %SHELLSHELF_TEST_GH_STDERR% 1>&2\r\n\
+  exit /b %SHELLSHELF_TEST_GH_EXIT_CODE%\r\n\
+)\r\n",
             log_path.display()
         )
     } else {
@@ -338,7 +405,15 @@ if \"%1\"==\"pr\" echo %SHELLSHELF_TEST_GH_PR_URL%\r\n",
             "#!/bin/sh\n\
 printf '%s\\n' \"$*\" >> \"{}\"\n\
 if [ \"$1\" = \"pr\" ]; then\n\
-  printf '%s\\n' \"${{SHELLSHELF_TEST_GH_PR_URL:-https://github.com/acme/shared-shellshelf/pull/1}}\"\n\
+  if [ -n \"$SHELLSHELF_TEST_GH_PR_URL\" ]; then\n\
+    printf '%s\\n' \"$SHELLSHELF_TEST_GH_PR_URL\"\n\
+  elif [ -z \"$SHELLSHELF_TEST_GH_EXIT_CODE\" ]; then\n\
+    printf '%s\\n' 'https://github.com/acme/shared-shellshelf/pull/1'\n\
+  fi\n\
+  if [ -n \"$SHELLSHELF_TEST_GH_STDERR\" ]; then\n\
+    printf '%s\\n' \"$SHELLSHELF_TEST_GH_STDERR\" >&2\n\
+  fi\n\
+  exit \"${{SHELLSHELF_TEST_GH_EXIT_CODE:-0}}\"\n\
 fi\n",
             log_path.display()
         )
@@ -415,6 +490,68 @@ fn write_text_file(path: &Path, contents: &str) {
         fs::create_dir_all(parent).unwrap();
     }
     fs::write(path, contents).unwrap();
+}
+
+fn run_git_command(cwd: &Path, args: &[&str]) {
+    let status = Command::new("git")
+        .current_dir(cwd)
+        .args(args)
+        .status()
+        .unwrap();
+    assert!(status.success(), "git command failed: {:?}", args);
+}
+
+fn read_git_output(cwd: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .current_dir(cwd)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "git command failed: {:?}", args);
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
+fn init_managed_checkout_repo(temp_dir: &Path, checkout_path: &Path) {
+    let origin_path = temp_dir.join("origin.git");
+    let seed_path = temp_dir.join("seed");
+
+    run_git_command(temp_dir, &["init", "--bare", origin_path.to_str().unwrap()]);
+    run_git_command(temp_dir, &["init", seed_path.to_str().unwrap()]);
+    run_git_command(&seed_path, &["config", "user.name", "Shellshelf Tests"]);
+    run_git_command(
+        &seed_path,
+        &["config", "user.email", "shellshelf-tests@example.com"],
+    );
+    write_text_file(
+        &seed_path
+            .join("teams")
+            .join("platform")
+            .join("shelves")
+            .join("curl.json"),
+        r#"{"commands":[]}"#,
+    );
+    run_git_command(&seed_path, &["add", "."]);
+    run_git_command(&seed_path, &["commit", "-m", "Initial commit"]);
+    run_git_command(&seed_path, &["branch", "-M", "main"]);
+    run_git_command(
+        &seed_path,
+        &["remote", "add", "origin", origin_path.to_str().unwrap()],
+    );
+    run_git_command(&seed_path, &["push", "-u", "origin", "main"]);
+    run_git_command(&origin_path, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+    run_git_command(
+        temp_dir,
+        &[
+            "clone",
+            origin_path.to_str().unwrap(),
+            checkout_path.to_str().unwrap(),
+        ],
+    );
+    run_git_command(checkout_path, &["config", "user.name", "Shellshelf Tests"]);
+    run_git_command(
+        checkout_path,
+        &["config", "user.email", "shellshelf-tests@example.com"],
+    );
 }
 
 #[test]
@@ -1440,14 +1577,81 @@ fn test_github_mode_updates_existing_checkout_when_due() {
     let mut cmd = Command::cargo_bin("shellshelf").unwrap();
     cmd.env("HOME", home_dir)
         .env("SHELLSHELF_GIT_BIN", &git_path)
+        .env("SHELLSHELF_TEST_GIT_CURRENT_BRANCH", "feat/platform-curl")
+        .env(
+            "SHELLSHELF_TEST_GIT_LOCAL_BRANCHES",
+            "main,feat/platform-curl",
+        )
         .args(["--team", "platform", "--list"]);
 
     cmd.assert().success();
 
     let git_args = fs::read_to_string(git_log_path).unwrap();
     assert!(git_args.contains("-C"));
+    assert!(git_args.contains("symbolic-ref"));
+    assert!(git_args.contains("switch"));
     assert!(git_args.contains("pull"));
     assert!(git_args.contains("--ff-only"));
+    assert!(git_args.contains("origin"));
+    assert!(git_args.contains("main"));
+}
+
+#[test]
+fn test_open_pr_failure_restores_managed_github_checkout_branch() {
+    let temp_dir = TempDir::new().unwrap();
+    let home_dir = temp_dir.path();
+    let shellshelf_dir = home_dir.join(".shellshelf");
+    let config_path = shellshelf_dir.join("config.json");
+    let checkout_path = shellshelf_dir.join("repos").join("acme__shared-shellshelf");
+    let (gh_path, gh_log_path) = write_publish_mock_gh(home_dir);
+
+    fs::create_dir_all(&shellshelf_dir).unwrap();
+    init_managed_checkout_repo(home_dir, &checkout_path);
+    write_github_config(
+        &config_path,
+        "acme/shared-shellshelf",
+        "teams",
+        GithubConfigOptions {
+            default_shelf: Some("curl"),
+            default_team: Some("platform"),
+            auto_update_repo: Some(false),
+            ..GithubConfigOptions::default()
+        },
+    );
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", home_dir)
+        .env("SHELLSHELF_GH_BIN", &gh_path)
+        .env("SHELLSHELF_TEST_GH_EXIT_CODE", "1")
+        .env(
+            "SHELLSHELF_TEST_GH_STDERR",
+            "a pull request already exists for this branch",
+        )
+        .env("GIT_AUTHOR_NAME", "Shellshelf Tests")
+        .env("GIT_AUTHOR_EMAIL", "shellshelf-tests@example.com")
+        .env("GIT_COMMITTER_NAME", "Shellshelf Tests")
+        .env("GIT_COMMITTER_EMAIL", "shellshelf-tests@example.com")
+        .args([
+            "--team",
+            "platform",
+            "-s",
+            "curl",
+            "--add",
+            "curl https://api.example.com/platform",
+            "--open-pr",
+        ]);
+
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "a pull request already exists for this branch",
+    ));
+
+    assert_eq!(
+        read_git_output(&checkout_path, &["branch", "--show-current"]),
+        "main"
+    );
+
+    let gh_log = fs::read_to_string(gh_log_path).unwrap();
+    assert!(gh_log.contains("pr create"));
 }
 
 #[test]

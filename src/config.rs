@@ -118,6 +118,7 @@ struct RawSharedRepoConfig {
 pub(crate) struct SharedStorageContext {
     pub(crate) repository_root: PathBuf,
     pub(crate) teams_dir: PathBuf,
+    pub(crate) is_managed_github_checkout: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -618,6 +619,7 @@ pub(crate) fn resolve_shared_storage_context(
     config: &ShellshelfConfig,
 ) -> Result<Option<SharedStorageContext>> {
     let explicit_repo = matches.get_one::<String>("repo").map(PathBuf::from);
+    let has_explicit_repo = explicit_repo.is_some();
     let explicit_teams_dir = matches.get_one::<String>("teams-dir").map(PathBuf::from);
     let team = matches.get_one::<String>("team");
     let all_teams = matches.get_flag("all-teams");
@@ -648,6 +650,11 @@ pub(crate) fn resolve_shared_storage_context(
     Ok(Some(SharedStorageContext {
         repository_root,
         teams_dir,
+        is_managed_github_checkout: !has_explicit_repo
+            && matches!(
+                config.shared_repo.as_ref(),
+                Some(SharedRepoConfig::Github(_))
+            ),
     }))
 }
 
@@ -950,6 +957,7 @@ mod tests {
         let shared_context = SharedStorageContext {
             repository_root: temp_dir.path().join("shared-shellshelf"),
             teams_dir: PathBuf::from("teams"),
+            is_managed_github_checkout: false,
         };
         fs::create_dir_all(
             shared_context
@@ -981,6 +989,7 @@ mod tests {
         let shared_context = SharedStorageContext {
             repository_root: temp_dir.path().join("shared-shellshelf"),
             teams_dir: PathBuf::from("teams"),
+            is_managed_github_checkout: false,
         };
 
         for (team, shelf) in [("payments", "curl"), ("platform", "aws")] {

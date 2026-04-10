@@ -12,8 +12,8 @@ use crate::github::{
 };
 use crate::postman_import::{import_postman_collection, PostmanImportOutcome};
 use crate::shared_repo_publish::{
-    prepare_publish_branch, publish_pull_request, sanitize_branch_component, PreparedPublishBranch,
-    PublishPullRequestPlan,
+    prepare_publish_branch, publish_pull_request, restore_managed_checkout_to_base_branch,
+    sanitize_branch_component, PreparedPublishBranch, PublishPullRequestPlan,
 };
 use crate::web::run_web_server;
 use crate::Result;
@@ -64,6 +64,7 @@ struct SharedPublishContext {
     prepared_branch: PreparedPublishBranch,
     plan: PublishPullRequestPlan,
     repo_root: PathBuf,
+    restore_managed_checkout: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -210,17 +211,17 @@ pub fn run() -> Result<()> {
                 .expect("shelf should be resolved for shelf creation"),
             "create shelf",
         )?;
-        let changed = create_shelf(
-            &matches,
-            data_file
-                .as_deref()
-                .expect("data file should be resolved for shelf creation"),
-            shelf
-                .as_deref()
-                .expect("shelf should be resolved for shelf creation"),
-        )?;
-        publish_shared_changes(publish_context, changed)?;
-        return Ok(());
+        return run_shared_write_operation(publish_context, || {
+            create_shelf(
+                &matches,
+                data_file
+                    .as_deref()
+                    .expect("data file should be resolved for shelf creation"),
+                shelf
+                    .as_deref()
+                    .expect("shelf should be resolved for shelf creation"),
+            )
+        });
     }
 
     if let Some(import_path) = import_postman_path {
@@ -231,9 +232,9 @@ pub fn run() -> Result<()> {
             &import_outcome.shelf_name,
             "import a Postman collection",
         )?;
-        let import_result = save_postman_import(&matches, shared_context.as_ref(), import_outcome)?;
-        publish_shared_changes(publish_context, import_result.changed)?;
-        return Ok(());
+        return run_shared_write_operation(publish_context, || {
+            Ok(save_postman_import(&matches, shared_context.as_ref(), import_outcome)?.changed)
+        });
     }
 
     if let Some(command) = add_command {
@@ -249,25 +250,26 @@ pub fn run() -> Result<()> {
             shelf,
             "add a command",
         )?;
-        let description = matches
-            .get_one::<String>("description")
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty());
-        let mut db = CommandDatabase::load_from_file(data_file)?;
-        let added = db.add_command(command.clone(), description.clone());
-        if added {
-            db.save_to_file(data_file)?;
-            match description {
-                Some(description) => {
-                    println!("Added command to shelf '{shelf}': {command} ({description})");
+        return run_shared_write_operation(publish_context, || {
+            let description = matches
+                .get_one::<String>("description")
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
+            let mut db = CommandDatabase::load_from_file(data_file)?;
+            let added = db.add_command(command.clone(), description.clone());
+            if added {
+                db.save_to_file(data_file)?;
+                match description {
+                    Some(description) => {
+                        println!("Added command to shelf '{shelf}': {command} ({description})");
+                    }
+                    None => println!("Added command to shelf '{shelf}': {command}"),
                 }
-                None => println!("Added command to shelf '{shelf}': {command}"),
+            } else {
+                println!("Command already exists in shelf '{shelf}'.");
             }
-        } else {
-            println!("Command already exists in shelf '{shelf}'.");
-        }
-        publish_shared_changes(publish_context, added)?;
-        return Ok(());
+            Ok(added)
+        });
     }
 
     if list_commands {
@@ -515,7 +517,44 @@ fn resolve_shared_publish_context(
             changed_paths: vec![data_file],
         },
         repo_root,
+        restore_managed_checkout: shared_context.is_managed_github_checkout,
     }))
+}
+
+fn run_shared_write_operation<F>(
+    publish_context: Option<SharedPublishContext>,
+    operation: F,
+) -> Result<()>
+where
+    F: FnOnce() -> Result<bool>,
+{
+    let result =
+        operation().and_then(|changed| publish_shared_changes(publish_context.clone(), changed));
+    let cleanup_result = cleanup_shared_publish_context(publish_context.as_ref());
+
+    match (result, cleanup_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(cleanup_error)) => Err(cleanup_error),
+        (Err(error), Err(cleanup_error)) => {
+            Err(format!("{error} Cleanup also failed: {cleanup_error}").into())
+        }
+    }
+}
+
+fn cleanup_shared_publish_context(publish_context: Option<&SharedPublishContext>) -> Result<()> {
+    let Some(publish_context) = publish_context else {
+        return Ok(());
+    };
+
+    if !publish_context.restore_managed_checkout {
+        return Ok(());
+    }
+
+    restore_managed_checkout_to_base_branch(
+        &publish_context.repo_root,
+        &publish_context.prepared_branch.base_branch,
+    )
 }
 
 fn publish_shared_changes(
