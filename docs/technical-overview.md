@@ -31,6 +31,7 @@ At a high level, execution is:
 5. For GitHub-backed shared mode, ensure a local checkout exists and refresh it if due.
 6. Execute one of the user operations:
    - add shared GitHub repo config
+   - force sync the managed shared checkout
    - web interface
    - add
    - import Postman collection
@@ -47,9 +48,10 @@ When `--web` is used, the runtime diverges after config/shared-context resolutio
 1. Build a loopback-only Axum router.
 2. Serve static HTML, CSS, and JS assets directly from the Rust binary, injecting the configured theme into the HTML shell.
 3. Expose browse data as JSON using the same local/shared repository rules as the CLI.
-4. Accept shelf-creation and command-save mutations against the same shelf JSON files used by the CLI.
-5. Allow the workbench to save arbitrary commands into shelves while still validating run requests as curl-only.
-6. Spawn `curl` directly, capture request metadata, response headers, plus raw body bytes, and expose previewable media through a short-lived in-memory body store.
+4. Expose a shared reload route that re-reads shared shelves and force-syncs managed GitHub checkouts on demand.
+5. Accept shelf-creation and command-save mutations against the same shelf JSON files used by the CLI.
+6. Allow the workbench to save arbitrary commands into shelves while still validating run requests as curl-only.
+7. Spawn `curl` directly, capture request metadata, response headers, plus raw body bytes, and expose previewable media through a short-lived in-memory body store.
 
 ## Storage Model
 
@@ -99,6 +101,7 @@ Current GitHub support is intentionally conservative:
 - `--add-repo` can write `shared_repo.mode = "github"` config from a GitHub URL or `owner/repo`
 - bootstrap uses `gh repo clone`
 - refresh uses `git pull --ff-only`
+- force sync reuses the same checkout refresh path but skips the interval gate
 - refresh state is tracked in `~/.shellshelf/state`
 - refresh cadence is configurable with `shared_repo.auto_update_interval_minutes`
 - shared `--add`, `--create-shelf`, and `--import-postman` can optionally publish via `--open-pr`
@@ -149,6 +152,7 @@ The current product direction is intentionally opinionated:
 - the web interface may persist any stored command shape the CLI can already store
 - non-curl commands remain visible and editable in the web UI but are intentionally non-runnable
 - the web UI uses a zero-build tree explorer and a config-driven theme set: `dracula` by default, plus `solarized-dark`, `solarized-light`, and `giphy`
+- the web UI can manually reload shared shelves, and managed GitHub shared repos force-sync before that reload completes
 
 ## Tests
 

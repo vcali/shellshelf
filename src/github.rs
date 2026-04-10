@@ -184,6 +184,33 @@ pub(crate) fn maybe_update_github_repo_checkout(
     )
 }
 
+pub(crate) fn force_update_github_repo_checkout_with_runner<F>(
+    github_repo: &str,
+    checkout_path: &Path,
+    state_root: &Path,
+    update_runner: F,
+) -> Result<()>
+where
+    F: FnOnce(&Path) -> Result<()>,
+{
+    update_runner(checkout_path)?;
+    write_github_repo_sync_stamp(state_root, github_repo)?;
+    Ok(())
+}
+
+pub(crate) fn force_update_github_repo_checkout(
+    github_repo: &str,
+    checkout_path: &Path,
+) -> Result<()> {
+    let state_root = get_default_github_state_root();
+    force_update_github_repo_checkout_with_runner(
+        github_repo,
+        checkout_path,
+        &state_root,
+        pull_github_repo,
+    )
+}
+
 pub(crate) fn ensure_github_repo_checkout_with_runner<F>(
     github_repo: &str,
     checkout_root: &Path,
@@ -325,10 +352,10 @@ fn run_git_output(
 #[cfg(test)]
 mod tests {
     use super::{
-        ensure_github_repo_checkout_with_runner, get_github_repo_checkout_path,
-        get_github_repo_sync_stamp_path, maybe_update_github_repo_checkout_with_runner,
-        normalize_github_repo_input, validate_github_repo_name,
-        DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES,
+        ensure_github_repo_checkout_with_runner, force_update_github_repo_checkout_with_runner,
+        get_github_repo_checkout_path, get_github_repo_sync_stamp_path,
+        maybe_update_github_repo_checkout_with_runner, normalize_github_repo_input,
+        validate_github_repo_name, DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES,
     };
     use std::fs;
     use std::path::Path;
@@ -506,5 +533,26 @@ mod tests {
         .unwrap();
 
         assert!(!was_updated);
+    }
+
+    #[test]
+    fn test_force_update_github_repo_checkout_with_runner_always_updates() {
+        let temp_dir = TempDir::new().unwrap();
+        let checkout_path = temp_dir.path().join("acme__shared-shellshelf");
+        let state_root = temp_dir.path().join("state");
+        fs::create_dir_all(&checkout_path).unwrap();
+
+        force_update_github_repo_checkout_with_runner(
+            "acme/shared-shellshelf",
+            &checkout_path,
+            &state_root,
+            |path| {
+                assert_eq!(path, checkout_path.as_path());
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert!(state_root.join("acme__shared-shellshelf.sync").exists());
     }
 }

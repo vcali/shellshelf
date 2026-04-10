@@ -6,6 +6,7 @@ const state = {
   selectedCommand: null,
   createShelfTarget: null,
   activeTab: "response",
+  isReloadingShared: false,
   expanded: {
     local: true,
     shared: true,
@@ -137,12 +138,31 @@ function renderLocalGroup(shelves) {
 function renderSharedGroup(teams) {
   const children = teams.length
     ? teams.map(renderTeamNode).join("")
-    : `<div class="empty-state">Shared not configured.</div>`;
+    : `<div class="empty-state">${state.data?.shared_repo_configured ? "No shared shelves." : "Shared not configured."}</div>`;
+  const reloadTitle = state.data?.shared_can_force_sync
+    ? "Force sync and reload shared shelves"
+    : "Reload shared shelves";
+  const reloadButton = state.data?.shared_repo_configured
+    ? `
+        <button
+          class="icon-button tree-reload-button ${state.isReloadingShared ? "is-loading" : ""}"
+          type="button"
+          data-action="reload-shared"
+          aria-label="${escapeAttribute(reloadTitle)}"
+          title="${escapeAttribute(reloadTitle)}"
+          ${state.isReloadingShared ? "disabled" : ""}>
+          ${reloadIcon()}
+        </button>
+      `
+    : "";
 
   return `
     <section class="tree-group">
       <div class="tree-group-header">
         <p class="tree-group-title">Shared</p>
+        <div class="tree-group-actions">
+          ${reloadButton}
+        </div>
       </div>
       <div class="tree-children">
         ${children}
@@ -270,6 +290,11 @@ function handleSidebarClick(event) {
   if (action === "toggle-team") {
     toggleTeam(button.dataset.team);
     renderSidebar();
+    return;
+  }
+
+  if (action === "reload-shared") {
+    reloadSharedShelves();
     return;
   }
 
@@ -671,6 +696,36 @@ async function createShelf() {
   }
 }
 
+async function reloadSharedShelves() {
+  if (state.isReloadingShared || !state.data?.shared_repo_configured) return;
+
+  const selection = state.selectedShelf
+    ? {
+        scope: state.selectedScope,
+        team: state.selectedTeam,
+        shelf: state.selectedShelf,
+      }
+    : null;
+  const preferredCommand = state.selectedCommand;
+
+  state.isReloadingShared = true;
+  renderSidebar();
+  setEditorStatus("Reloading shared shelves...", "subtle");
+
+  try {
+    const payload = await requestJson("/api/shared/reload", {
+      method: "POST",
+    });
+    applyBrowseData(payload.browse, selection, preferredCommand);
+    setEditorStatus(payload.message, "success");
+  } catch (error) {
+    setEditorStatus(error.message, "error");
+  } finally {
+    state.isReloadingShared = false;
+    renderSidebar();
+  }
+}
+
 async function requestJson(url, options = {}) {
   const response = await fetch(url, options);
   const payload = await response.json().catch(() => ({}));
@@ -777,6 +832,17 @@ function githubIcon() {
         0 0 .67-.21 2.2.82a7.5 7.5 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12
         .51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48
         0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"
+      />
+    </svg>
+  `;
+}
+
+function reloadIcon() {
+  return `
+    <svg class="reload-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        fill="currentColor"
+        d="M13.65 2.35A7.95 7.95 0 0 0 8 0a8 8 0 1 0 7.75 10h-2.1A6 6 0 1 1 12.24 4.3L9.5 7H16V.5l-2.35 1.85Z"
       />
     </svg>
   `;

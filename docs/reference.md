@@ -181,6 +181,7 @@ Precedence:
 
 - `--repo <PATH>`: path to a shared repository checkout
 - `--add-repo <GITHUB_REPO>`: configure the shared GitHub repository in config from a GitHub URL or `owner/repo`
+- `--force-sync`: force-sync the managed shared GitHub checkout configured through `shared_repo.mode = "github"`
 - `--team <TEAM>`: target a single team folder
 - `--open-pr`: commit, push, and open a pull request for a shared write operation
 - `--base-branch <BRANCH>`: base branch to fetch and rebase onto before `--open-pr`
@@ -197,6 +198,8 @@ Precedence:
 
 `--add-repo` is a setup command and must be used on its own.
 
+`--force-sync` is also standalone. It refreshes the managed GitHub checkout immediately, ignoring the normal auto-update interval. It does not operate on explicit `--repo <PATH>` checkouts or path-mode shared repositories.
+
 ## Web Interface
 
 `shellshelf --web` runs a localhost-only web interface for interactive HTTP work.
@@ -208,6 +211,7 @@ Current behavior:
 - applies `web.theme` from config when present, with `dracula` as the default
 - reads local shelves plus any shared repository configured through `--repo`, `--teams-dir`, or `shared_repo` config
 - renders local shelves and shared team shelves in an expandable tree explorer
+- adds a Shared reload button that re-reads shared shelves and force-syncs first when the shared source is a managed GitHub checkout
 - shows all stored commands, but only runs commands that validate as supported curl commands
 - loads selected commands into an editable workbench with editable description and command fields
 - can create shelves in the visible local or team-scoped shared area
