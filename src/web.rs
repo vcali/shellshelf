@@ -1,7 +1,9 @@
 use crate::browse::{
     load_browse_data_from_root, local_shelves_root, BrowseData, CommandEntry, ShelfData, TeamData,
 };
-use crate::config::{get_team_data_file_path, SharedStorageContext, WebTheme};
+use crate::config::{
+    force_sync_shared_storage, get_team_data_file_path, SharedStorageContext, WebTheme,
+};
 use crate::curl_runner::{analyze_command, run_curl_command, CurlRunResponse, RunStore};
 use crate::database::{CommandDatabase, SaveCommandOutcome};
 use crate::Result;
@@ -29,6 +31,14 @@ struct WebState {
 struct BrowseResponse {
     local: Vec<WebShelfData>,
     shared: Vec<WebTeamData>,
+    shared_repo_configured: bool,
+    shared_can_force_sync: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct SharedReloadResponse {
+    message: String,
+    browse: BrowseResponse,
 }
 
 #[derive(Debug, Serialize)]
@@ -168,6 +178,7 @@ fn build_router(state: WebState) -> Router {
         .route("/assets/styles.css", get(styles))
         .route("/assets/app.js", get(app_js))
         .route("/api/browse", get(browse))
+        .route("/api/shared/reload", post(reload_shared))
         .route("/api/shelves", post(create_shelf))
         .route("/api/commands", post(save_command))
         .route("/api/run", post(run_command))
@@ -205,7 +216,32 @@ async fn browse(
     let data = load_browse_data_from_root(&state.local_shelves_root, state.shared_context.as_ref())
         .map_err(|error| WebError::internal(format!("Failed to load browse data: {error}")))?;
 
-    Ok(Json(map_browse_response(data)))
+    Ok(Json(map_browse_response(
+        data,
+        state.shared_context.as_ref(),
+    )))
+}
+
+async fn reload_shared(
+    State(state): State<WebState>,
+) -> std::result::Result<Json<SharedReloadResponse>, WebError> {
+    let shared_context = state.shared_context.as_ref().ok_or_else(|| {
+        WebError::bad_request("Shared repository is not configured for the web interface.")
+    })?;
+
+    let was_synced = force_sync_shared_storage(shared_context)
+        .map_err(|error| WebError::internal(format!("Failed to reload shared shelves: {error}")))?;
+    let data = load_browse_data_from_root(&state.local_shelves_root, state.shared_context.as_ref())
+        .map_err(|error| WebError::internal(format!("Failed to load browse data: {error}")))?;
+
+    Ok(Json(SharedReloadResponse {
+        message: if was_synced {
+            "Force-synced the managed shared repository and reloaded shared shelves.".to_string()
+        } else {
+            "Reloaded shared shelves.".to_string()
+        },
+        browse: map_browse_response(data, state.shared_context.as_ref()),
+    }))
 }
 
 async fn create_shelf(
@@ -330,10 +366,17 @@ async fn run_body(
         .into_response())
 }
 
-fn map_browse_response(data: BrowseData) -> BrowseResponse {
+fn map_browse_response(
+    data: BrowseData,
+    shared_context: Option<&SharedStorageContext>,
+) -> BrowseResponse {
     BrowseResponse {
         local: data.local.into_iter().map(map_shelf).collect(),
         shared: data.shared.into_iter().map(map_team).collect(),
+        shared_repo_configured: shared_context.is_some(),
+        shared_can_force_sync: shared_context
+            .and_then(|context| context.managed_github_repo.as_ref())
+            .is_some(),
     }
 }
 
@@ -697,7 +740,7 @@ mod tests {
             shared_context: Some(SharedStorageContext {
                 repository_root: temp_dir.path().join("shared-repo"),
                 teams_dir: PathBuf::from("teams"),
-                is_managed_github_checkout: false,
+                managed_github_repo: None,
             }),
             run_store: Arc::new(crate::curl_runner::RunStore::default()),
             theme: WebTheme::SolarizedDark,
@@ -726,6 +769,64 @@ mod tests {
             .join("shelves")
             .join("media.json")
             .exists());
+    }
+
+    #[tokio::test]
+    async fn test_reload_shared_route_reloads_shared_shelves_without_managed_sync() {
+        let temp_dir = TempDir::new().unwrap();
+        fs::create_dir_all(
+            temp_dir
+                .path()
+                .join("shared-repo")
+                .join("teams")
+                .join("platform")
+                .join("shelves"),
+        )
+        .unwrap();
+        fs::write(
+            temp_dir
+                .path()
+                .join("shared-repo")
+                .join("teams")
+                .join("platform")
+                .join("shelves")
+                .join("curl.json"),
+            r#"{"commands":[]}"#,
+        )
+        .unwrap();
+
+        let app = build_router(WebState {
+            local_shelves_root: temp_dir.path().join("local-shelves"),
+            shared_context: Some(SharedStorageContext {
+                repository_root: temp_dir.path().join("shared-repo"),
+                teams_dir: PathBuf::from("teams"),
+                managed_github_repo: None,
+            }),
+            run_store: Arc::new(crate::curl_runner::RunStore::default()),
+            theme: WebTheme::SolarizedDark,
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri("/api/shared/reload")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(payload["message"], "Reloaded shared shelves.");
+        assert_eq!(payload["browse"]["shared_repo_configured"], true);
+        assert_eq!(payload["browse"]["shared_can_force_sync"], false);
+        assert_eq!(payload["browse"]["shared"][0]["team"], "platform");
     }
 
     #[test]

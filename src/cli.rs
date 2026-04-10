@@ -94,6 +94,12 @@ pub(crate) fn build_cli() -> Command {
                 .help("Configure the shared GitHub repository from a GitHub URL or owner/repo"),
         )
         .arg(
+            Arg::new("force-sync")
+                .long("force-sync")
+                .help("Force-sync the managed shared GitHub checkout")
+                .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
             Arg::new("teams-dir")
                 .long("teams-dir")
                 .value_name("PATH")

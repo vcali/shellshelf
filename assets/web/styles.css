@@ -659,6 +659,30 @@ pre {
   margin-bottom: 8px;
 }
 
+.tree-group-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tree-reload-button {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 999px;
+}
+
+.reload-icon {
+  width: 13px;
+  height: 13px;
+}
+
+.tree-reload-button.is-loading .reload-icon {
+  animation: reload-spin 900ms linear infinite;
+}
+
 .tree-children {
   display: grid;
   gap: 4px;
@@ -732,6 +756,16 @@ pre {
   width: 14px;
   height: 14px;
   color: var(--accent-strong);
+}
+
+@keyframes reload-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .modal-backdrop {

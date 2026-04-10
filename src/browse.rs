@@ -208,7 +208,7 @@ mod tests {
         let shared_context = SharedStorageContext {
             repository_root: shared_root,
             teams_dir: PathBuf::from("teams"),
-            is_managed_github_checkout: false,
+            managed_github_repo: None,
         };
 
         let data = BrowseData {

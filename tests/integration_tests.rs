@@ -568,7 +568,8 @@ fn test_help_output() {
         .stdout(predicate::str::contains("--list"))
         .stdout(predicate::str::contains("--import-postman"))
         .stdout(predicate::str::contains("--web"))
-        .stdout(predicate::str::contains("--web-port"));
+        .stdout(predicate::str::contains("--web-port"))
+        .stdout(predicate::str::contains("--force-sync"));
 }
 
 #[test]
@@ -614,6 +615,19 @@ fn test_web_mode_rejects_standard_cli_flags() {
         .stderr(predicate::str::contains(
             "--web cannot be combined with --add, --list, --list-shelves, --create-shelf, or --import-postman.",
         ));
+}
+
+#[test]
+fn test_force_sync_requires_standalone_usage() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+
+    cmd.env("HOME", temp_dir.path())
+        .args(["--force-sync", "--list"]);
+
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "--force-sync must be used on its own.",
+    ));
 }
 
 #[test]
@@ -1588,6 +1602,50 @@ fn test_github_mode_updates_existing_checkout_when_due() {
 
     let git_args = fs::read_to_string(git_log_path).unwrap();
     assert!(git_args.contains("-C"));
+    assert!(git_args.contains("symbolic-ref"));
+    assert!(git_args.contains("switch"));
+    assert!(git_args.contains("pull"));
+    assert!(git_args.contains("--ff-only"));
+    assert!(git_args.contains("origin"));
+    assert!(git_args.contains("main"));
+}
+
+#[test]
+fn test_force_sync_updates_managed_checkout_immediately() {
+    let temp_dir = TempDir::new().unwrap();
+    let home_dir = temp_dir.path();
+    let shellshelf_dir = home_dir.join(".shellshelf");
+    let config_path = shellshelf_dir.join("config.json");
+    let checkout_path = shellshelf_dir.join("repos").join("acme__shared-shellshelf");
+    let (git_path, git_log_path) = write_mock_git(home_dir);
+
+    fs::create_dir_all(checkout_path.join("teams").join("platform").join("shelves")).unwrap();
+    fs::create_dir_all(&shellshelf_dir).unwrap();
+    write_github_config(
+        &config_path,
+        "acme/shared-shellshelf",
+        "teams",
+        GithubConfigOptions {
+            auto_update_repo: Some(false),
+            ..GithubConfigOptions::default()
+        },
+    );
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", home_dir)
+        .env("SHELLSHELF_GIT_BIN", &git_path)
+        .env("SHELLSHELF_TEST_GIT_CURRENT_BRANCH", "feat/platform-curl")
+        .env(
+            "SHELLSHELF_TEST_GIT_LOCAL_BRANCHES",
+            "main,feat/platform-curl",
+        )
+        .arg("--force-sync");
+
+    cmd.assert().success().stdout(predicate::str::contains(
+        "Force-synced managed shared repository 'acme/shared-shellshelf'.",
+    ));
+
+    let git_args = fs::read_to_string(git_log_path).unwrap();
     assert!(git_args.contains("symbolic-ref"));
     assert!(git_args.contains("switch"));
     assert!(git_args.contains("pull"));

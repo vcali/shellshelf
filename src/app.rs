@@ -1,10 +1,11 @@
 use crate::cli::build_cli;
 use crate::config::{
-    get_local_data_file_path, list_all_team_shelves, list_local_shelves, list_team_shelves,
-    load_all_team_commands, load_team_commands, resolve_active_shelf, resolve_config,
-    resolve_config_path, resolve_data_file_path, resolve_shared_storage_context,
-    shared_repository_required_message, write_config, DefaultSharedReadTarget,
-    GithubSharedRepoConfig, SharedRepoConfig, SharedStorageContext, ShellshelfConfig,
+    force_sync_shared_storage, get_local_data_file_path, list_all_team_shelves, list_local_shelves,
+    list_team_shelves, load_all_team_commands, load_team_commands, resolve_active_shelf,
+    resolve_config, resolve_config_path, resolve_data_file_path,
+    resolve_shared_storage_context_with_options, shared_repository_required_message, write_config,
+    DefaultSharedReadTarget, GithubSharedRepoConfig, SharedRepoConfig, SharedStorageContext,
+    ShellshelfConfig,
 };
 use crate::database::{CommandDatabase, StoredCommand};
 use crate::github::{
@@ -150,6 +151,7 @@ pub fn run() -> Result<()> {
     validate_matches(&matches)?;
     let add_repo = matches.get_one::<String>("add-repo");
     let add_command = matches.get_one::<String>("add");
+    let force_sync = matches.get_flag("force-sync");
     let import_postman_path = matches.get_one::<String>("import-postman");
     let list_commands = matches.get_flag("list");
     let search_keywords: Option<Vec<String>> = matches
@@ -161,7 +163,12 @@ pub fn run() -> Result<()> {
     }
 
     let all_teams = matches.get_flag("all-teams");
-    let shared_context = resolve_shared_storage_context(&matches, &config)?;
+    let shared_context =
+        resolve_shared_storage_context_with_options(&matches, &config, force_sync)?;
+
+    if force_sync {
+        return run_force_sync(shared_context.as_ref());
+    }
 
     if matches.get_flag("web") {
         return run_web_server(
@@ -470,6 +477,23 @@ fn configure_shared_repo(
     Ok(())
 }
 
+fn run_force_sync(shared_context: Option<&SharedStorageContext>) -> Result<()> {
+    let shared_context = shared_context.ok_or(shared_repository_required_message())?;
+    if !force_sync_shared_storage(shared_context)? {
+        return Err(
+            "Force sync requires a managed GitHub shared repository configured through shared_repo.mode = 'github'."
+                .into(),
+        );
+    }
+
+    let github_repo = shared_context
+        .managed_github_repo
+        .as_deref()
+        .expect("managed github repo should exist after a successful force sync");
+    println!("Force-synced managed shared repository '{github_repo}'.");
+    Ok(())
+}
+
 fn resolve_shared_publish_context(
     matches: &clap::ArgMatches,
     shared_context: Option<&SharedStorageContext>,
@@ -517,7 +541,7 @@ fn resolve_shared_publish_context(
             changed_paths: vec![data_file],
         },
         repo_root,
-        restore_managed_checkout: shared_context.is_managed_github_checkout,
+        restore_managed_checkout: shared_context.managed_github_repo.is_some(),
     }))
 }
 
@@ -624,6 +648,32 @@ fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
 
     if matches.get_one::<u16>("web-port").is_some() && !web_mode {
         return Err("--web-port can only be used with --web.".into());
+    }
+
+    if matches.get_flag("force-sync")
+        && (matches.get_one::<String>("add").is_some()
+            || matches.get_one::<String>("description").is_some()
+            || matches.get_one::<String>("import-postman").is_some()
+            || matches.get_one::<String>("target-shelf").is_some()
+            || matches.get_one::<String>("shelf").is_some()
+            || matches.get_one::<String>("create-shelf").is_some()
+            || matches.get_flag("list")
+            || matches.get_flag("list-shelves")
+            || matches.get_one::<String>("repo").is_some()
+            || matches.get_one::<String>("add-repo").is_some()
+            || matches.get_one::<String>("teams-dir").is_some()
+            || matches.get_one::<String>("team").is_some()
+            || matches.get_flag("open-pr")
+            || matches.get_one::<String>("base-branch").is_some()
+            || matches.get_one::<String>("pr-branch").is_some()
+            || matches.get_flag("all-teams")
+            || matches.get_flag("local-only")
+            || matches.get_flag("shared-only")
+            || matches.get_one::<usize>("limit").is_some()
+            || matches.get_flag("web")
+            || has_keywords)
+    {
+        return Err("--force-sync must be used on its own.".into());
     }
 
     if matches.get_one::<String>("base-branch").is_some() && !open_pr {

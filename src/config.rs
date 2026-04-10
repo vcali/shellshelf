@@ -1,7 +1,7 @@
 use crate::database::{CommandDatabase, StoredCommand};
 use crate::github::{
-    ensure_github_repo_checkout, get_default_github_state_root, maybe_update_github_repo_checkout,
-    validate_github_repo_name, write_github_repo_sync_stamp,
+    ensure_github_repo_checkout, force_update_github_repo_checkout, get_default_github_state_root,
+    maybe_update_github_repo_checkout, validate_github_repo_name, write_github_repo_sync_stamp,
     DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES,
 };
 use crate::Result;
@@ -118,7 +118,7 @@ struct RawSharedRepoConfig {
 pub(crate) struct SharedStorageContext {
     pub(crate) repository_root: PathBuf,
     pub(crate) teams_dir: PathBuf,
-    pub(crate) is_managed_github_checkout: bool,
+    pub(crate) managed_github_repo: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -614,9 +614,10 @@ fn insert_optional_bool(object: &mut serde_json::Map<String, Value>, key: &str, 
     }
 }
 
-pub(crate) fn resolve_shared_storage_context(
+pub(crate) fn resolve_shared_storage_context_with_options(
     matches: &ArgMatches,
     config: &ShellshelfConfig,
+    skip_config_auto_update: bool,
 ) -> Result<Option<SharedStorageContext>> {
     let explicit_repo = matches.get_one::<String>("repo").map(PathBuf::from);
     let has_explicit_repo = explicit_repo.is_some();
@@ -630,7 +631,9 @@ pub(crate) fn resolve_shared_storage_context(
 
     let repository_root = if let Some(repository_root) = explicit_repo {
         repository_root
-    } else if let Some(repository_root) = resolve_repository_root_from_config(config)? {
+    } else if let Some(repository_root) =
+        resolve_repository_root_from_config(config, skip_config_auto_update)?
+    {
         repository_root
     } else {
         if team.is_some() || all_teams {
@@ -647,18 +650,28 @@ pub(crate) fn resolve_shared_storage_context(
         None => config.teams_dir()?,
     };
 
+    let managed_github_repo = if has_explicit_repo {
+        None
+    } else {
+        match config.shared_repo.as_ref() {
+            Some(SharedRepoConfig::Github(github_config)) => {
+                Some(github_config.github_repo.clone())
+            }
+            _ => None,
+        }
+    };
+
     Ok(Some(SharedStorageContext {
         repository_root,
         teams_dir,
-        is_managed_github_checkout: !has_explicit_repo
-            && matches!(
-                config.shared_repo.as_ref(),
-                Some(SharedRepoConfig::Github(_))
-            ),
+        managed_github_repo,
     }))
 }
 
-fn resolve_repository_root_from_config(config: &ShellshelfConfig) -> Result<Option<PathBuf>> {
+fn resolve_repository_root_from_config(
+    config: &ShellshelfConfig,
+    skip_auto_update: bool,
+) -> Result<Option<PathBuf>> {
     match config.shared_repo.as_ref() {
         Some(SharedRepoConfig::Path(path_config)) => Ok(Some(path_config.path.clone())),
         Some(SharedRepoConfig::Github(github_config)) => {
@@ -669,18 +682,29 @@ fn resolve_repository_root_from_config(config: &ShellshelfConfig) -> Result<Opti
                     &get_default_github_state_root(),
                     &github_config.github_repo,
                 );
-            } else if let Err(error) = maybe_update_github_repo_checkout(
-                &github_config.github_repo,
-                &checkout_path,
-                github_config.auto_update_repo,
-                github_config.auto_update_interval(),
-            ) {
-                eprintln!("Warning: failed to update shared repository checkout: {error}");
+            } else if !skip_auto_update {
+                if let Err(error) = maybe_update_github_repo_checkout(
+                    &github_config.github_repo,
+                    &checkout_path,
+                    github_config.auto_update_repo,
+                    github_config.auto_update_interval(),
+                ) {
+                    eprintln!("Warning: failed to update shared repository checkout: {error}");
+                }
             }
             Ok(Some(checkout_path))
         }
         None => Ok(None),
     }
+}
+
+pub(crate) fn force_sync_shared_storage(shared_context: &SharedStorageContext) -> Result<bool> {
+    let Some(github_repo) = shared_context.managed_github_repo.as_deref() else {
+        return Ok(false);
+    };
+
+    force_update_github_repo_checkout(github_repo, &shared_context.repository_root)?;
+    Ok(true)
 }
 
 pub(crate) fn resolve_data_file_path(
@@ -957,7 +981,7 @@ mod tests {
         let shared_context = SharedStorageContext {
             repository_root: temp_dir.path().join("shared-shellshelf"),
             teams_dir: PathBuf::from("teams"),
-            is_managed_github_checkout: false,
+            managed_github_repo: None,
         };
         fs::create_dir_all(
             shared_context
@@ -989,7 +1013,7 @@ mod tests {
         let shared_context = SharedStorageContext {
             repository_root: temp_dir.path().join("shared-shellshelf"),
             teams_dir: PathBuf::from("teams"),
-            is_managed_github_checkout: false,
+            managed_github_repo: None,
         };
 
         for (team, shelf) in [("payments", "curl"), ("platform", "aws")] {
