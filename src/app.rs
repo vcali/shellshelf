@@ -1,11 +1,14 @@
+use crate::backup_repo::{backup_local_shelf, sync_all_local_shelves};
+use crate::browse::local_shelves_root;
 use crate::cli::build_cli;
 use crate::config::{
-    force_sync_shared_storage, get_local_data_file_path, list_all_team_shelves, list_local_shelves,
-    list_team_shelves, load_all_team_commands, load_team_commands, resolve_active_shelf,
-    resolve_config, resolve_config_path, resolve_data_file_path,
+    backup_repository_required_message, force_sync_backup_storage, force_sync_shared_storage,
+    get_local_data_file_path, list_all_team_shelves, list_local_shelves, list_team_shelves,
+    load_all_team_commands, load_team_commands, resolve_active_shelf,
+    resolve_backup_storage_context, resolve_config, resolve_config_path, resolve_data_file_path,
     resolve_shared_storage_context_with_options, shared_repository_required_message, write_config,
-    DefaultSharedReadTarget, GithubSharedRepoConfig, SharedRepoConfig, SharedStorageContext,
-    ShellshelfConfig,
+    BackupRepoConfig, BackupStorageContext, DefaultSharedReadTarget, GithubBackupRepoConfig,
+    GithubSharedRepoConfig, SharedRepoConfig, SharedStorageContext, ShellshelfConfig,
 };
 use crate::database::{CommandDatabase, StoredCommand};
 use crate::github::{
@@ -150,10 +153,13 @@ pub fn run() -> Result<()> {
     let config = resolve_config(&matches)?;
     validate_matches(&matches)?;
     let add_repo = matches.get_one::<String>("add-repo");
+    let add_backup_repo = matches.get_one::<String>("add-backup-repo");
     let add_command = matches.get_one::<String>("add");
     let force_sync = matches.get_flag("force-sync");
+    let force_sync_backup = matches.get_flag("force-sync-backup");
     let import_postman_path = matches.get_one::<String>("import-postman");
     let list_commands = matches.get_flag("list");
+    let sync_backup = matches.get_flag("sync-backup");
     let search_keywords: Option<Vec<String>> = matches
         .get_many::<String>("keywords")
         .map(|keywords| keywords.cloned().collect());
@@ -161,18 +167,29 @@ pub fn run() -> Result<()> {
     if let Some(repo_input) = add_repo {
         return configure_shared_repo(&config_path, &config, repo_input);
     }
+    if let Some(repo_input) = add_backup_repo {
+        return configure_backup_repo(&config_path, &config, repo_input);
+    }
 
     let all_teams = matches.get_flag("all-teams");
     let shared_context =
         resolve_shared_storage_context_with_options(&matches, &config, force_sync)?;
+    let backup_context = resolve_backup_storage_context(&config, force_sync_backup)?;
 
     if force_sync {
         return run_force_sync(shared_context.as_ref());
+    }
+    if force_sync_backup {
+        return run_backup_force_sync(backup_context.as_ref());
+    }
+    if sync_backup {
+        return run_backup_sync(backup_context.as_ref());
     }
 
     if matches.get_flag("web") {
         return run_web_server(
             shared_context,
+            backup_context,
             matches
                 .get_one::<u16>("web-port")
                 .copied()
@@ -210,38 +227,53 @@ pub fn run() -> Result<()> {
     }
 
     if matches.get_one::<String>("create-shelf").is_some() {
+        let shelf = shelf
+            .as_deref()
+            .expect("shelf should be resolved for shelf creation");
+        let data_file = data_file
+            .as_deref()
+            .expect("data file should be resolved for shelf creation");
         let publish_context = resolve_shared_publish_context(
             &matches,
             shared_context.as_ref(),
-            shelf
-                .as_deref()
-                .expect("shelf should be resolved for shelf creation"),
+            shelf,
             "create shelf",
         )?;
-        return run_shared_write_operation(publish_context, || {
-            create_shelf(
-                &matches,
-                data_file
-                    .as_deref()
-                    .expect("data file should be resolved for shelf creation"),
-                shelf
-                    .as_deref()
-                    .expect("shelf should be resolved for shelf creation"),
-            )
-        });
+        let backup_context_for_write = if matches.get_one::<String>("team").is_none() {
+            backup_context.as_ref()
+        } else {
+            None
+        };
+        return run_write_operation(
+            publish_context,
+            backup_context_for_write,
+            data_file,
+            shelf,
+            || create_shelf(&matches, data_file, shelf),
+        );
     }
 
     if let Some(import_path) = import_postman_path {
         let import_outcome = load_postman_import(&matches, Path::new(import_path))?;
+        let import_shelf = import_outcome.shelf_name.clone();
         let publish_context = resolve_shared_publish_context(
             &matches,
             shared_context.as_ref(),
-            &import_outcome.shelf_name,
+            &import_shelf,
             "import a Postman collection",
         )?;
-        return run_shared_write_operation(publish_context, || {
-            Ok(save_postman_import(&matches, shared_context.as_ref(), import_outcome)?.changed)
-        });
+        let backup_context_for_write = if matches.get_one::<String>("team").is_none() {
+            backup_context.as_ref()
+        } else {
+            None
+        };
+        return run_write_operation(
+            publish_context,
+            backup_context_for_write,
+            &get_local_data_file_path(&import_shelf)?,
+            &import_shelf,
+            || Ok(save_postman_import(&matches, shared_context.as_ref(), import_outcome)?.changed),
+        );
     }
 
     if let Some(command) = add_command {
@@ -257,26 +289,37 @@ pub fn run() -> Result<()> {
             shelf,
             "add a command",
         )?;
-        return run_shared_write_operation(publish_context, || {
-            let description = matches
-                .get_one::<String>("description")
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty());
-            let mut db = CommandDatabase::load_from_file(data_file)?;
-            let added = db.add_command(command.clone(), description.clone());
-            if added {
-                db.save_to_file(data_file)?;
-                match description {
-                    Some(description) => {
-                        println!("Added command to shelf '{shelf}': {command} ({description})");
+        let backup_context_for_write = if matches.get_one::<String>("team").is_none() {
+            backup_context.as_ref()
+        } else {
+            None
+        };
+        return run_write_operation(
+            publish_context,
+            backup_context_for_write,
+            data_file,
+            shelf,
+            || {
+                let description = matches
+                    .get_one::<String>("description")
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty());
+                let mut db = CommandDatabase::load_from_file(data_file)?;
+                let added = db.add_command(command.clone(), description.clone());
+                if added {
+                    db.save_to_file(data_file)?;
+                    match description {
+                        Some(description) => {
+                            println!("Added command to shelf '{shelf}': {command} ({description})");
+                        }
+                        None => println!("Added command to shelf '{shelf}': {command}"),
                     }
-                    None => println!("Added command to shelf '{shelf}': {command}"),
+                } else {
+                    println!("Command already exists in shelf '{shelf}'.");
                 }
-            } else {
-                println!("Command already exists in shelf '{shelf}'.");
-            }
-            Ok(added)
-        });
+                Ok(added)
+            },
+        );
     }
 
     if list_commands {
@@ -477,6 +520,37 @@ fn configure_shared_repo(
     Ok(())
 }
 
+fn configure_backup_repo(
+    config_path: &Path,
+    config: &ShellshelfConfig,
+    repo_input: &str,
+) -> Result<()> {
+    let github_repo = normalize_github_repo_input(repo_input)?;
+    let (auto_update_repo, auto_update_interval) = match config.backup_repo.as_ref() {
+        Some(BackupRepoConfig::Github(existing)) => (
+            existing.auto_update_repo,
+            existing.auto_update_interval_minutes,
+        ),
+        Some(BackupRepoConfig::Path(_)) | None => {
+            (true, DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES)
+        }
+    };
+
+    let mut updated = config.clone();
+    updated.backup_repo = Some(BackupRepoConfig::Github(GithubBackupRepoConfig {
+        github_repo: github_repo.clone(),
+        auto_update_repo,
+        auto_update_interval_minutes: auto_update_interval,
+    }));
+    write_config(config_path, &updated)?;
+
+    println!(
+        "Configured backup GitHub repository '{github_repo}' in {}.",
+        config_path.display()
+    );
+    Ok(())
+}
+
 fn run_force_sync(shared_context: Option<&SharedStorageContext>) -> Result<()> {
     let shared_context = shared_context.ok_or(shared_repository_required_message())?;
     if !force_sync_shared_storage(shared_context)? {
@@ -491,6 +565,34 @@ fn run_force_sync(shared_context: Option<&SharedStorageContext>) -> Result<()> {
         .as_deref()
         .expect("managed github repo should exist after a successful force sync");
     println!("Force-synced managed shared repository '{github_repo}'.");
+    Ok(())
+}
+
+fn run_backup_force_sync(backup_context: Option<&BackupStorageContext>) -> Result<()> {
+    let backup_context = backup_context.ok_or(backup_repository_required_message())?;
+    if !force_sync_backup_storage(backup_context)? {
+        return Err(
+            "Force sync requires a managed GitHub backup repository configured through backup_repo.mode = 'github'."
+                .into(),
+        );
+    }
+
+    let github_repo = backup_context
+        .managed_github_repo
+        .as_deref()
+        .expect("managed github repo should exist after a successful backup force sync");
+    println!("Force-synced managed backup repository '{github_repo}'.");
+    Ok(())
+}
+
+fn run_backup_sync(backup_context: Option<&BackupStorageContext>) -> Result<()> {
+    let backup_context = backup_context.ok_or(backup_repository_required_message())?;
+    let changed = sync_all_local_shelves(backup_context, &local_shelves_root())?;
+    if changed == 0 {
+        println!("Local shelves already match the configured backup repository.");
+    } else {
+        println!("Synchronized local shelves to the configured backup repository.");
+    }
     Ok(())
 }
 
@@ -545,15 +647,20 @@ fn resolve_shared_publish_context(
     }))
 }
 
-fn run_shared_write_operation<F>(
+fn run_write_operation<F>(
     publish_context: Option<SharedPublishContext>,
+    backup_context: Option<&BackupStorageContext>,
+    local_data_file: &Path,
+    shelf: &str,
     operation: F,
 ) -> Result<()>
 where
     F: FnOnce() -> Result<bool>,
 {
-    let result =
-        operation().and_then(|changed| publish_shared_changes(publish_context.clone(), changed));
+    let result = operation().and_then(|changed| {
+        publish_shared_changes(publish_context.clone(), changed)?;
+        publish_backup_changes(backup_context, local_data_file, shelf, changed)
+    });
     let cleanup_result = cleanup_shared_publish_context(publish_context.as_ref());
 
     match (result, cleanup_result) {
@@ -564,6 +671,29 @@ where
             Err(format!("{error} Cleanup also failed: {cleanup_error}").into())
         }
     }
+}
+
+fn publish_backup_changes(
+    backup_context: Option<&BackupStorageContext>,
+    local_data_file: &Path,
+    shelf: &str,
+    changed: bool,
+) -> Result<()> {
+    let Some(backup_context) = backup_context else {
+        return Ok(());
+    };
+
+    if !changed {
+        return Ok(());
+    }
+
+    if backup_local_shelf(backup_context, local_data_file, shelf)? {
+        println!("Updated backup for local shelf '{shelf}'.");
+    } else {
+        println!("Local shelf '{shelf}' already matched the backup repository.");
+    }
+
+    Ok(())
 }
 
 fn cleanup_shared_publish_context(publish_context: Option<&SharedPublishContext>) -> Result<()> {
@@ -609,11 +739,15 @@ fn publish_shared_changes(
 
 fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
     let add_repo = matches.get_one::<String>("add-repo");
+    let add_backup_repo = matches.get_one::<String>("add-backup-repo");
     let all_teams = matches.get_flag("all-teams");
+    let force_sync = matches.get_flag("force-sync");
+    let force_sync_backup = matches.get_flag("force-sync-backup");
     let local_only = matches.get_flag("local-only");
     let shared_only = matches.get_flag("shared-only");
     let import_postman = matches.get_one::<String>("import-postman");
     let open_pr = matches.get_flag("open-pr");
+    let sync_backup = matches.get_flag("sync-backup");
     let web_mode = matches.get_flag("web");
     let has_keywords = matches
         .get_many::<String>("keywords")
@@ -641,16 +775,48 @@ fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
             || all_teams
             || local_only
             || shared_only
+            || force_sync_backup
+            || sync_backup
+            || add_backup_repo.is_some()
             || has_keywords)
     {
         return Err("--add-repo must be used on its own.".into());
+    }
+
+    if add_backup_repo.is_some()
+        && (web_mode
+            || matches.get_one::<u16>("web-port").is_some()
+            || matches.get_one::<String>("add").is_some()
+            || matches.get_one::<String>("description").is_some()
+            || import_postman.is_some()
+            || matches.get_one::<String>("target-shelf").is_some()
+            || matches.get_one::<String>("shelf").is_some()
+            || matches.get_one::<String>("create-shelf").is_some()
+            || matches.get_flag("list")
+            || matches.get_flag("list-shelves")
+            || matches.get_one::<usize>("limit").is_some()
+            || matches.get_one::<String>("repo").is_some()
+            || matches.get_one::<String>("teams-dir").is_some()
+            || matches.get_one::<String>("team").is_some()
+            || open_pr
+            || matches.get_one::<String>("base-branch").is_some()
+            || matches.get_one::<String>("pr-branch").is_some()
+            || all_teams
+            || local_only
+            || shared_only
+            || force_sync
+            || force_sync_backup
+            || sync_backup
+            || has_keywords)
+    {
+        return Err("--add-backup-repo must be used on its own.".into());
     }
 
     if matches.get_one::<u16>("web-port").is_some() && !web_mode {
         return Err("--web-port can only be used with --web.".into());
     }
 
-    if matches.get_flag("force-sync")
+    if force_sync
         && (matches.get_one::<String>("add").is_some()
             || matches.get_one::<String>("description").is_some()
             || matches.get_one::<String>("import-postman").is_some()
@@ -660,7 +826,8 @@ fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
             || matches.get_flag("list")
             || matches.get_flag("list-shelves")
             || matches.get_one::<String>("repo").is_some()
-            || matches.get_one::<String>("add-repo").is_some()
+            || add_repo.is_some()
+            || add_backup_repo.is_some()
             || matches.get_one::<String>("teams-dir").is_some()
             || matches.get_one::<String>("team").is_some()
             || matches.get_flag("open-pr")
@@ -669,11 +836,71 @@ fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
             || matches.get_flag("all-teams")
             || matches.get_flag("local-only")
             || matches.get_flag("shared-only")
+            || force_sync_backup
+            || sync_backup
             || matches.get_one::<usize>("limit").is_some()
             || matches.get_flag("web")
             || has_keywords)
     {
         return Err("--force-sync must be used on its own.".into());
+    }
+
+    if force_sync_backup
+        && (matches.get_one::<String>("add").is_some()
+            || matches.get_one::<String>("description").is_some()
+            || matches.get_one::<String>("import-postman").is_some()
+            || matches.get_one::<String>("target-shelf").is_some()
+            || matches.get_one::<String>("shelf").is_some()
+            || matches.get_one::<String>("create-shelf").is_some()
+            || matches.get_flag("list")
+            || matches.get_flag("list-shelves")
+            || matches.get_one::<String>("repo").is_some()
+            || add_repo.is_some()
+            || add_backup_repo.is_some()
+            || matches.get_one::<String>("teams-dir").is_some()
+            || matches.get_one::<String>("team").is_some()
+            || matches.get_flag("open-pr")
+            || matches.get_one::<String>("base-branch").is_some()
+            || matches.get_one::<String>("pr-branch").is_some()
+            || matches.get_flag("all-teams")
+            || matches.get_flag("local-only")
+            || matches.get_flag("shared-only")
+            || force_sync
+            || sync_backup
+            || matches.get_one::<usize>("limit").is_some()
+            || matches.get_flag("web")
+            || has_keywords)
+    {
+        return Err("--force-sync-backup must be used on its own.".into());
+    }
+
+    if sync_backup
+        && (matches.get_one::<String>("add").is_some()
+            || matches.get_one::<String>("description").is_some()
+            || matches.get_one::<String>("import-postman").is_some()
+            || matches.get_one::<String>("target-shelf").is_some()
+            || matches.get_one::<String>("shelf").is_some()
+            || matches.get_one::<String>("create-shelf").is_some()
+            || matches.get_flag("list")
+            || matches.get_flag("list-shelves")
+            || matches.get_one::<String>("repo").is_some()
+            || add_repo.is_some()
+            || add_backup_repo.is_some()
+            || matches.get_one::<String>("teams-dir").is_some()
+            || matches.get_one::<String>("team").is_some()
+            || matches.get_flag("open-pr")
+            || matches.get_one::<String>("base-branch").is_some()
+            || matches.get_one::<String>("pr-branch").is_some()
+            || matches.get_flag("all-teams")
+            || matches.get_flag("local-only")
+            || matches.get_flag("shared-only")
+            || force_sync
+            || force_sync_backup
+            || matches.get_one::<usize>("limit").is_some()
+            || matches.get_flag("web")
+            || has_keywords)
+    {
+        return Err("--sync-backup must be used on its own.".into());
     }
 
     if matches.get_one::<String>("base-branch").is_some() && !open_pr {

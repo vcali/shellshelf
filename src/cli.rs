@@ -94,9 +94,27 @@ pub(crate) fn build_cli() -> Command {
                 .help("Configure the shared GitHub repository from a GitHub URL or owner/repo"),
         )
         .arg(
+            Arg::new("add-backup-repo")
+                .long("add-backup-repo")
+                .value_name("GITHUB_REPO")
+                .help("Configure the private backup GitHub repository from a GitHub URL or owner/repo"),
+        )
+        .arg(
             Arg::new("force-sync")
                 .long("force-sync")
                 .help("Force-sync the managed shared GitHub checkout")
+                .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("force-sync-backup")
+                .long("force-sync-backup")
+                .help("Force-sync the managed backup GitHub checkout")
+                .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("sync-backup")
+                .long("sync-backup")
+                .help("Mirror local shelves into the configured backup repository")
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(

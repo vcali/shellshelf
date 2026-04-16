@@ -1,8 +1,10 @@
+use crate::backup_repo::backup_local_shelf;
 use crate::browse::{
     load_browse_data_from_root, local_shelves_root, BrowseData, CommandEntry, ShelfData, TeamData,
 };
 use crate::config::{
-    force_sync_shared_storage, get_team_data_file_path, SharedStorageContext, WebTheme,
+    force_sync_shared_storage, get_team_data_file_path, BackupStorageContext, SharedStorageContext,
+    WebTheme,
 };
 use crate::curl_runner::{analyze_command, run_curl_command, CurlRunResponse, RunStore};
 use crate::database::{CommandDatabase, SaveCommandOutcome};
@@ -23,6 +25,7 @@ const INDEX_HTML: &str = include_str!("../assets/web/index.html");
 struct WebState {
     local_shelves_root: PathBuf,
     shared_context: Option<SharedStorageContext>,
+    backup_context: Option<BackupStorageContext>,
     run_store: Arc<RunStore>,
     theme: WebTheme,
 }
@@ -145,21 +148,29 @@ impl IntoResponse for WebError {
 
 pub(crate) fn run_web_server(
     shared_context: Option<SharedStorageContext>,
+    backup_context: Option<BackupStorageContext>,
     requested_port: Option<u16>,
     theme: WebTheme,
 ) -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(run_web_server_async(shared_context, requested_port, theme))
+    runtime.block_on(run_web_server_async(
+        shared_context,
+        backup_context,
+        requested_port,
+        theme,
+    ))
 }
 
 async fn run_web_server_async(
     shared_context: Option<SharedStorageContext>,
+    backup_context: Option<BackupStorageContext>,
     requested_port: Option<u16>,
     theme: WebTheme,
 ) -> Result<()> {
     let app = build_router(WebState {
         local_shelves_root: local_shelves_root(),
         shared_context,
+        backup_context,
         run_store: Arc::new(RunStore::default()),
         theme,
     });
@@ -265,6 +276,8 @@ async fn create_shelf(
     CommandDatabase::new()
         .save_to_file(&data_file)
         .map_err(|error| WebError::internal(format!("Failed to create shelf: {error}")))?;
+    publish_backup_if_needed(&state, payload.scope, &data_file, &payload.shelf)
+        .map_err(|error| WebError::internal(error.to_string()))?;
 
     Ok(Json(MutationResponse {
         message: match payload.scope {
@@ -311,6 +324,8 @@ async fn save_command(
     database
         .save_to_file(&data_file)
         .map_err(|error| WebError::internal(format!("Failed to save command: {error}")))?;
+    publish_backup_if_needed(&state, payload.scope, &data_file, &payload.shelf)
+        .map_err(|error| WebError::internal(error.to_string()))?;
 
     Ok(Json(MutationResponse {
         message: match outcome {
@@ -442,6 +457,24 @@ fn local_data_file_path(local_shelves_root: &StdPath, shelf: &str) -> PathBuf {
     local_shelves_root.join(format!("{shelf}.json"))
 }
 
+fn publish_backup_if_needed(
+    state: &WebState,
+    scope: ShelfScope,
+    data_file: &StdPath,
+    shelf: &str,
+) -> Result<()> {
+    if scope != ShelfScope::Local {
+        return Ok(());
+    }
+
+    let Some(backup_context) = state.backup_context.as_ref() else {
+        return Ok(());
+    };
+
+    backup_local_shelf(backup_context, data_file, shelf)?;
+    Ok(())
+}
+
 fn format_command_preview(command: &str) -> String {
     let Ok(tokens) = shell_words::split(command) else {
         return fallback_command_preview(command);
@@ -541,6 +574,7 @@ mod tests {
         build_router(WebState {
             local_shelves_root: temp_dir.path().join("local-shelves"),
             shared_context: None,
+            backup_context: None,
             run_store: Arc::new(crate::curl_runner::RunStore::default()),
             theme: WebTheme::SolarizedDark,
         })
@@ -569,6 +603,7 @@ mod tests {
         let app = build_router(WebState {
             local_shelves_root: temp_dir.path().join("local-shelves"),
             shared_context: None,
+            backup_context: None,
             run_store: Arc::new(crate::curl_runner::RunStore::default()),
             theme: WebTheme::Giphy,
         });
@@ -657,6 +692,7 @@ mod tests {
         let app = build_router(WebState {
             local_shelves_root: temp_dir.path().join("local-shelves"),
             shared_context: None,
+            backup_context: None,
             run_store,
             theme: WebTheme::SolarizedDark,
         });
@@ -742,6 +778,7 @@ mod tests {
                 teams_dir: PathBuf::from("teams"),
                 managed_github_repo: None,
             }),
+            backup_context: None,
             run_store: Arc::new(crate::curl_runner::RunStore::default()),
             theme: WebTheme::SolarizedDark,
         });
@@ -802,6 +839,7 @@ mod tests {
                 teams_dir: PathBuf::from("teams"),
                 managed_github_repo: None,
             }),
+            backup_context: None,
             run_store: Arc::new(crate::curl_runner::RunStore::default()),
             theme: WebTheme::SolarizedDark,
         });

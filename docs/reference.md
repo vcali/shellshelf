@@ -1,6 +1,6 @@
 # shellshelf Reference
 
-This document covers configuration, CLI parameters, storage modes, and the current GitHub-backed shared repository workflow.
+This document covers configuration, CLI parameters, storage modes, and the current GitHub-backed shared-repository and private-backup workflows.
 
 ## Installation
 
@@ -40,6 +40,26 @@ Local storage is shelf-based:
 ```
 
 Use local mode when you do not pass `--team` or `--all-teams`.
+
+### Private backup repository mode
+
+Backup mode mirrors local shelves into a separate repository without changing read behavior:
+
+```text
+private-shellshelf/
+  shelves/
+    curl.json
+    git.json
+```
+
+Backup mode is activated when `backup_repo` is configured.
+
+Current behavior:
+
+- default reads still use local shelves; the backup repo is not part of search or list scope
+- local CLI writes and local web saves mirror the changed shelf into the backup repo
+- GitHub-backed backup repos commit and push directly to the base branch
+- `--sync-backup` seeds or refreshes the backup repo from all existing local shelves
 
 ### Shared repository mode
 
@@ -124,10 +144,24 @@ shellshelf --config /path/to/config.json ...
 }
 ```
 
+### Backup repo mode
+
+```json
+{
+  "backup_repo": {
+    "mode": "github",
+    "github_repo": "acme/private-shellshelf",
+    "auto_update_repo": true,
+    "auto_update_interval_minutes": 15
+  }
+}
+```
+
 Supported top-level keys:
 
 - `default_shelf`: optional default shelf for writes and shelf-scoped list/search operations. If omitted, `shellshelf` falls back to the built-in `default` shelf when an active shelf is required
 - `shared_repo`: shared repository configuration
+- `backup_repo`: private backup repository configuration for local shelves
 - `web`: optional web-interface configuration
 - `default_list_limit`: optional default limit for `--list`. `0` means unlimited. If omitted, `shellshelf` defaults to `20`
 
@@ -147,10 +181,20 @@ Supported keys inside `shared_repo`:
 - `auto_update_repo`: GitHub mode only. Defaults to `true`
 - `auto_update_interval_minutes`: GitHub mode only. Defaults to `15` and must be greater than `0`
 
+Supported keys inside `backup_repo`:
+
+- `mode`: must be `path` or `github`
+- `path`: required for `mode = "path"`
+- `github_repo`: required for `mode = "github"`, in `<owner>/<repo>` format
+- `auto_update_repo`: GitHub mode only. Defaults to `true`
+- `auto_update_interval_minutes`: GitHub mode only. Defaults to `15` and must be greater than `0`
+
 Validation rules:
 
 - `mode = "path"` requires `path` and rejects `github_repo`, `auto_update_repo`, and `auto_update_interval_minutes`
 - `mode = "github"` requires `github_repo` and rejects `path`
+- `backup_repo.mode = "path"` requires `backup_repo.path` and rejects `backup_repo.github_repo`, `backup_repo.auto_update_repo`, and `backup_repo.auto_update_interval_minutes`
+- `backup_repo.mode = "github"` requires `backup_repo.github_repo` and rejects `backup_repo.path`
 - `default_team` and `default_all_teams = true` cannot be configured together
 - `default_shelf` must use the normal shelf naming rules
 - flat legacy config keys such as `github_repo`, `shared_repo_path`, `teams_dir`, and `auto_update_repo` at the top level are rejected
@@ -192,13 +236,25 @@ Precedence:
 - `--shared-only`: limit default list/search commands to shared storage
 - `--limit <COUNT>`: limit how many commands are shown with `--list`. `0` means unlimited
 
+### Backup options
+
+- `--add-backup-repo <GITHUB_REPO>`: configure the private backup GitHub repository in config from a GitHub URL or `owner/repo`
+- `--force-sync-backup`: force-sync the managed backup GitHub checkout configured through `backup_repo.mode = "github"`
+- `--sync-backup`: mirror every local shelf into the configured backup repository
+
 ### Configuration option
 
 - `--config <PATH>`: use a non-default `shellshelf` config file
 
 `--add-repo` is a setup command and must be used on its own.
 
+`--add-backup-repo` is a setup command and must be used on its own.
+
 `--force-sync` is also standalone. It refreshes the managed GitHub checkout immediately, ignoring the normal auto-update interval. It does not operate on explicit `--repo <PATH>` checkouts or path-mode shared repositories.
+
+`--force-sync-backup` is also standalone. It refreshes the managed backup checkout immediately, ignoring the normal auto-update interval. It only works for `backup_repo.mode = "github"`.
+
+`--sync-backup` is standalone. It copies every local shelf file into the configured backup repository, then commits and pushes any resulting changes.
 
 ## Web Interface
 
@@ -216,6 +272,7 @@ Current behavior:
 - loads selected commands into an editable workbench with editable description and command fields
 - can create shelves in the visible local or team-scoped shared area
 - can save new commands or update the selected command in the current shelf
+- local shelf creates and saves also mirror into `backup_repo` when configured
 - displays parsed request method, URL, and request headers next to response headers after a curl run
 - previews text responses inline
 - previews image and video responses inline when the response content type is previewable
@@ -253,6 +310,8 @@ When search keywords are provided without `--shelf`, `shellshelf` searches acros
 - `--shared-only`: every shelf in the default shared scope, which is all teams unless `shared_repo.default_team` narrows it
 
 `--create-shelf <NAME>` creates the requested shelf file explicitly and exits. If the shelf already exists, `shellshelf` reports that and does not overwrite it.
+
+If `backup_repo` is configured, local `--add`, local `--create-shelf`, local `--import-postman`, and local web saves mirror the changed shelf file into the backup repo and push it directly.
 
 When `--open-pr` is added to a shared `--create-shelf`, `shellshelf` prepares a clean publish branch before writing, then commits the new shelf file, pushes it, and opens a pull request after the write succeeds.
 
@@ -309,7 +368,7 @@ The teams directory must be a relative path and cannot contain `.` or `..` compo
 
 ## GitHub Integration
 
-Current GitHub integration is checkout-based for reads and PR-based for optional shared writes. `shellshelf` still relies on local `git` and `gh` authentication rather than managing credentials on its own.
+Current GitHub integration is checkout-based for reads, PR-based for optional shared writes, and direct-push based for local backup mirrors. `shellshelf` still relies on local `git` and `gh` authentication rather than managing credentials on its own.
 
 Requirements:
 
@@ -321,6 +380,7 @@ Requirements:
 Behavior:
 
 - if `shared_repo.mode` is `github`, `shellshelf` clones into `~/.shellshelf/repos/<owner>__<repo>`
+- if `backup_repo.mode` is `github`, `shellshelf` clones into the same managed checkout root under `~/.shellshelf/repos/<owner>__<repo>`
 - managed checkouts are refreshed with `git pull --ff-only`
 - refresh runs at most once per `auto_update_interval_minutes`
 - set `auto_update_repo` to `false` to disable refresh entirely
@@ -330,6 +390,8 @@ Behavior:
 - if `--pr-branch` is omitted, `shellshelf` reuses the current non-base branch when possible; otherwise it creates a branch named like `shellshelf/<team>-<shelf>`
 - after the write, `shellshelf` stages the changed shelf JSON, commits it, pushes it with `git push --set-upstream origin <branch>`, and opens a pull request with `gh pr create`
 - if the write is a no-op, `shellshelf` skips commit, push, and PR creation
+- local backup writes target `shelves/<shelf>.json` in the backup repo, commit on the base branch, and push directly with `git push origin <base-branch>`
+- `--sync-backup` applies the same direct-push flow across every local shelf file
 
 ## Search Behavior
 

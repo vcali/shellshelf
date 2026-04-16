@@ -1,6 +1,6 @@
 # shellshelf
 
-`shellshelf` is a CLI, localhost web interface, and bundled Codex skill for storing, searching, and sharing reusable shell commands across personal shelves and team repositories, including a web workbench for running stored `curl` commands and inspecting responses.
+`shellshelf` is a CLI, localhost web interface, and bundled Codex skill for storing, searching, and sharing reusable shell commands across personal shelves and team repositories, with optional private-repo backup for local shelves and a web workbench for running stored `curl` commands and inspecting responses.
 
 The name is meant to evoke a shelf of reusable shell commands without borrowing software-library terminology.
 
@@ -48,6 +48,13 @@ Connect a shared GitHub-backed repo once:
 shellshelf --add-repo https://github.com/acme/shared-shellshelf.git
 ```
 
+Connect a private GitHub-backed backup repo for local shelves:
+
+```bash
+shellshelf --add-backup-repo https://github.com/acme/private-shellshelf.git
+shellshelf --sync-backup
+```
+
 Search shared team shelves:
 
 ```bash
@@ -73,6 +80,7 @@ shellshelf --web --web-port 4920
 
 - Search by keywords and shelf names instead of exact text only
 - Keep personal shelves local while browsing shared team shelves from the same tool
+- Mirror local shelves into a private backup repository without mixing them into shared team reads
 - Open pull requests for shared-shelf writes without leaving the CLI
 - Launch a localhost web interface with a tree explorer and editable request workbench
 - Run stored `curl` commands in the web UI with inline text, image, and video previews
@@ -113,6 +121,8 @@ Add a command locally:
 shellshelf -s curl -a "curl -I https://api.github.com/users/octocat"
 ```
 
+If `backup_repo` is configured, local CLI and web writes also mirror the changed shelf into that backup repository and push it directly.
+
 Add a command with a short description:
 
 ```bash
@@ -141,6 +151,12 @@ Create a shelf explicitly:
 ```bash
 shellshelf --create-shelf git
 shellshelf --repo /path/to/shared-shellshelf --team platform --create-shelf aws
+```
+
+Seed a configured backup repo from your existing local shelves:
+
+```bash
+shellshelf --sync-backup
 ```
 
 Import an exported Postman collection into a new shelf:
