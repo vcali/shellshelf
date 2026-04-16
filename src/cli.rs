@@ -94,10 +94,10 @@ pub(crate) fn build_cli() -> Command {
                 .help("Configure the shared GitHub repository from a GitHub URL or owner/repo"),
         )
         .arg(
-            Arg::new("add-backup-repo")
-                .long("add-backup-repo")
+            Arg::new("add-personal-repo")
+                .long("add-personal-repo")
                 .value_name("GITHUB_REPO")
-                .help("Configure the private backup GitHub repository from a GitHub URL or owner/repo"),
+                .help("Configure the personal GitHub repository from a GitHub URL or owner/repo"),
         )
         .arg(
             Arg::new("force-sync")
@@ -106,15 +106,15 @@ pub(crate) fn build_cli() -> Command {
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
-            Arg::new("force-sync-backup")
-                .long("force-sync-backup")
-                .help("Force-sync the managed backup GitHub checkout")
+            Arg::new("force-sync-personal")
+                .long("force-sync-personal")
+                .help("Force-sync the managed personal GitHub checkout")
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
-            Arg::new("sync-backup")
-                .long("sync-backup")
-                .help("Mirror local shelves into the configured backup repository")
+            Arg::new("sync-personal")
+                .long("sync-personal")
+                .help("Sync local shelves with the configured personal repository")
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(

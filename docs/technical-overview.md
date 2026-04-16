@@ -9,7 +9,7 @@ The application is split into focused modules:
 - [`src/main.rs`](../src/main.rs): binary entrypoint
 - [`src/lib.rs`](../src/lib.rs): crate wiring and public `run()` entry
 - [`src/app.rs`](../src/app.rs): CLI dispatch and output flow
-- [`src/backup_repo.rs`](../src/backup_repo.rs): local-shelf backup mirroring plus direct commit/push flow
+- [`src/personal_repo.rs`](../src/personal_repo.rs): local-shelf personal sync plus direct commit/push flow
 - [`src/browse.rs`](../src/browse.rs): shared browse data loading for local and shared shelves
 - [`src/cli.rs`](../src/cli.rs): `clap` command definition
 - [`src/config.rs`](../src/config.rs): config loading, shelf resolution, shared-storage resolution, path validation
@@ -28,14 +28,14 @@ At a high level, execution is:
 1. Build and parse CLI arguments.
 2. Load config from `~/.shellshelf/config.json` or `--config`.
 3. Resolve the active shelf from `-s` / `--shelf`, `default_shelf`, `--target-shelf` or the Postman collection name for `--import-postman`, or the built-in `default` fallback.
-4. Resolve local/shared storage context from the nested `shared_repo` config or CLI overrides, plus the optional local-shelf `backup_repo` context from config.
-5. For GitHub-backed shared or backup mode, ensure a local checkout exists and refresh it if due.
+4. Resolve local/shared storage context from the nested `shared_repo` config or CLI overrides, plus the optional local-shelf `personal_repo` context from config.
+5. For GitHub-backed shared or personal mode, ensure a local checkout exists and refresh it if due.
 6. Execute one of the user operations:
    - add shared GitHub repo config
-   - add backup GitHub repo config
+   - add personal GitHub repo config
    - force sync the managed shared checkout
-   - force sync the managed backup checkout
-   - sync all local shelves into the backup repo
+   - force sync the managed personal checkout
+   - sync all local shelves into the personal repo
    - web interface
    - add
    - import Postman collection
@@ -46,7 +46,7 @@ At a high level, execution is:
 7. If `--open-pr` is attached to a shared write, prepare a clean publish branch before mutating storage.
 8. Persist updated JSON if the operation mutates storage.
 9. If `--open-pr` was requested and the write changed a shared shelf file, commit, push, and open a pull request.
-10. If a local write changed a shelf file and `backup_repo` is configured, mirror it into the backup repo and push directly to the base branch.
+10. If a local write changed a shelf file and `personal_repo` is configured, sync it into the personal repo and push directly to the base branch.
 
 When `--web` is used, the runtime diverges after config/shared-context resolution:
 
@@ -74,10 +74,10 @@ Shared storage:
 <repo>/<teams_dir>/<team>/shelves/<shelf>.json
 ```
 
-Backup storage:
+Personal storage:
 
 ```text
-<backup-repo>/shelves/<shelf>.json
+<personal-repo>/shelves/<shelf>.json
 ```
 
 Each entry stores:
@@ -110,17 +110,17 @@ Current GitHub support is intentionally conservative:
 
 - repository selection comes from CLI or `shared_repo` config
 - `--add-repo` can write `shared_repo.mode = "github"` config from a GitHub URL or `owner/repo`
-- `--add-backup-repo` can write `backup_repo.mode = "github"` config from a GitHub URL or `owner/repo`
+- `--add-personal-repo` can write `personal_repo.mode = "github"` config from a GitHub URL or `owner/repo`
 - bootstrap uses `gh repo clone`
 - refresh uses `git pull --ff-only`
 - force sync reuses the same checkout refresh path but skips the interval gate
 - refresh state is tracked in `~/.shellshelf/state`
-- refresh cadence is configurable with `shared_repo.auto_update_interval_minutes` and `backup_repo.auto_update_interval_minutes`
+- refresh cadence is configurable with `shared_repo.auto_update_interval_minutes` and `personal_repo.auto_update_interval_minutes`
 - shared `--add`, `--create-shelf`, and `--import-postman` can optionally publish via `--open-pr`
 - publish prep checks for a clean checkout, fetches the selected base branch, switches to the requested or generated publish branch, and rebases on the base branch
 - publish completion stages the changed shelf file, commits it, pushes it, and opens a PR with `gh`
-- local backup writes stage `shelves/<shelf>.json`, commit on the base branch, and push directly without a PR
-- `--sync-backup` applies that same direct-push flow to every local shelf file
+- local personal sync writes stage `shelves/<shelf>.json`, commit on the base branch, and push directly without a PR
+- `--sync-personal` applies that same direct-push flow to every local shelf file
 
 `shellshelf` still does not:
 
@@ -162,13 +162,13 @@ The current product direction is intentionally opinionated:
 - supported Postman bodies currently include raw payloads and common multipart form-data payloads
 - shelves are the organization boundary; free-form tags are not part of the model
 - shared storage remains team-based to keep ownership simple
-- backup storage remains local-shelf based and intentionally does not affect read scope
+- personal storage remains local-shelf based and intentionally does not affect read scope
 - the web interface is a curl-only runner and does not execute arbitrary shell commands
 - the web interface may persist any stored command shape the CLI can already store
 - non-curl commands remain visible and editable in the web UI but are intentionally non-runnable
 - the web UI uses a zero-build tree explorer and a config-driven theme set: `dracula` by default, plus `solarized-dark`, `solarized-light`, and `giphy`
 - the web UI can manually reload shared shelves, and managed GitHub shared repos force-sync before that reload completes
-- the web UI mirrors local saves into the configured backup repo when backup mode is enabled
+- the web UI syncs local saves into the configured personal repo when personal mode is enabled
 
 ## Tests
 

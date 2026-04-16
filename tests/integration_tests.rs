@@ -68,21 +68,25 @@ fn write_path_config(
     .unwrap();
 }
 
-fn write_backup_path_config(config_path: &Path, backup_repo: &Path, default_shelf: Option<&str>) {
-    let mut backup_repo_value = serde_json::Map::new();
-    backup_repo_value.insert(
+fn write_personal_path_config(
+    config_path: &Path,
+    personal_repo: &Path,
+    default_shelf: Option<&str>,
+) {
+    let mut personal_repo_value = serde_json::Map::new();
+    personal_repo_value.insert(
         "mode".to_string(),
         serde_json::Value::String("path".to_string()),
     );
-    backup_repo_value.insert(
+    personal_repo_value.insert(
         "path".to_string(),
-        serde_json::Value::String(backup_repo.display().to_string()),
+        serde_json::Value::String(personal_repo.display().to_string()),
     );
 
     let mut config = serde_json::Map::new();
     config.insert(
-        "backup_repo".to_string(),
-        serde_json::Value::Object(backup_repo_value),
+        "personal_repo".to_string(),
+        serde_json::Value::Object(personal_repo_value),
     );
     if let Some(default_shelf) = default_shelf {
         config.insert(
@@ -600,9 +604,9 @@ fn test_help_output() {
         .stdout(predicate::str::contains("--web"))
         .stdout(predicate::str::contains("--web-port"))
         .stdout(predicate::str::contains("--force-sync"))
-        .stdout(predicate::str::contains("--add-backup-repo"))
-        .stdout(predicate::str::contains("--force-sync-backup"))
-        .stdout(predicate::str::contains("--sync-backup"));
+        .stdout(predicate::str::contains("--add-personal-repo"))
+        .stdout(predicate::str::contains("--force-sync-personal"))
+        .stdout(predicate::str::contains("--sync-personal"));
 }
 
 #[test]
@@ -664,15 +668,15 @@ fn test_force_sync_requires_standalone_usage() {
 }
 
 #[test]
-fn test_sync_backup_requires_standalone_usage() {
+fn test_sync_personal_requires_standalone_usage() {
     let temp_dir = TempDir::new().unwrap();
     let mut cmd = Command::cargo_bin("shellshelf").unwrap();
 
     cmd.env("HOME", temp_dir.path())
-        .args(["--sync-backup", "--list"]);
+        .args(["--sync-personal", "--list"]);
 
     cmd.assert().failure().stderr(predicate::str::contains(
-        "--sync-backup must be used on its own.",
+        "--sync-personal must be used on its own.",
     ));
 }
 
@@ -700,15 +704,15 @@ fn test_add_command_local() {
 }
 
 #[test]
-fn test_add_local_command_updates_backup_repo() {
+fn test_add_local_command_updates_personal_repo() {
     let temp_dir = TempDir::new().unwrap();
     let home_dir = temp_dir.path();
     let config_path = home_dir.join(".shellshelf").join("config.json");
-    let backup_repo = home_dir.join("private-backup");
+    let personal_repo = home_dir.join("private-shellshelf");
 
     fs::create_dir_all(config_path.parent().unwrap()).unwrap();
-    init_managed_checkout_repo(home_dir, &backup_repo);
-    write_backup_path_config(&config_path, &backup_repo, Some("curl"));
+    init_managed_checkout_repo(home_dir, &personal_repo);
+    write_personal_path_config(&config_path, &personal_repo, Some("curl"));
 
     let mut cmd = Command::cargo_bin("shellshelf").unwrap();
     cmd.env("HOME", home_dir)
@@ -716,18 +720,18 @@ fn test_add_local_command_updates_backup_repo() {
         .env("GIT_AUTHOR_EMAIL", "shellshelf-tests@example.com")
         .env("GIT_COMMITTER_NAME", "Shellshelf Tests")
         .env("GIT_COMMITTER_EMAIL", "shellshelf-tests@example.com")
-        .args(["-s", "curl", "--add", "curl https://example.com/backup"]);
+        .args(["-s", "curl", "--add", "curl https://example.com/personal"]);
 
     cmd.assert().success().stdout(predicate::str::contains(
-        "Updated backup for local shelf 'curl'.",
+        "Updated personal sync for local shelf 'curl'.",
     ));
 
-    assert!(backup_repo.join("shelves").join("curl.json").exists());
+    assert!(personal_repo.join("shelves").join("curl.json").exists());
     assert!(read_git_output(
         &home_dir.join("origin.git"),
         &["show", "HEAD:shelves/curl.json"],
     )
-    .contains("curl https://example.com/backup"));
+    .contains("curl https://example.com/personal"));
 }
 
 #[test]
@@ -751,15 +755,15 @@ fn test_create_local_shelf() {
 }
 
 #[test]
-fn test_sync_backup_pushes_existing_local_shelves() {
+fn test_sync_personal_pushes_existing_local_shelves() {
     let temp_dir = TempDir::new().unwrap();
     let home_dir = temp_dir.path();
     let config_path = home_dir.join(".shellshelf").join("config.json");
-    let backup_repo = home_dir.join("private-backup");
+    let personal_repo = home_dir.join("private-shellshelf");
 
     fs::create_dir_all(home_dir.join(".shellshelf").join("shelves")).unwrap();
-    write_backup_path_config(&config_path, &backup_repo, None);
-    init_managed_checkout_repo(home_dir, &backup_repo);
+    write_personal_path_config(&config_path, &personal_repo, None);
+    init_managed_checkout_repo(home_dir, &personal_repo);
     write_command_database(
         &home_dir
             .join(".shellshelf")
@@ -774,10 +778,10 @@ fn test_sync_backup_pushes_existing_local_shelves() {
         .env("GIT_AUTHOR_EMAIL", "shellshelf-tests@example.com")
         .env("GIT_COMMITTER_NAME", "Shellshelf Tests")
         .env("GIT_COMMITTER_EMAIL", "shellshelf-tests@example.com")
-        .arg("--sync-backup");
+        .arg("--sync-personal");
 
     cmd.assert().success().stdout(predicate::str::contains(
-        "Synchronized local shelves to the configured backup repository.",
+        "Synchronized local shelves to the configured personal repository.",
     ));
 
     assert!(read_git_output(
@@ -1895,7 +1899,7 @@ fn test_add_repo_rejects_combined_flags() {
 }
 
 #[test]
-fn test_add_backup_repo_writes_github_backup_repo_config_from_url() {
+fn test_add_personal_repo_writes_github_personal_repo_config_from_url() {
     let temp_dir = TempDir::new().unwrap();
     let home_dir = temp_dir.path();
     let shellshelf_dir = home_dir.join(".shellshelf");
@@ -1910,7 +1914,7 @@ fn test_add_backup_repo_writes_github_backup_repo_config_from_url() {
     "port": 4920,
     "theme": "giphy"
   },
-  "backup_repo": {
+  "personal_repo": {
     "mode": "path",
     "path": "/tmp/old-private-shellshelf"
   }
@@ -1919,12 +1923,12 @@ fn test_add_backup_repo_writes_github_backup_repo_config_from_url() {
 
     let mut cmd = Command::cargo_bin("shellshelf").unwrap();
     cmd.env("HOME", home_dir).args([
-        "--add-backup-repo",
+        "--add-personal-repo",
         "https://github.com/acme/private-shellshelf.git",
     ]);
 
     cmd.assert().success().stdout(predicate::str::contains(
-        "Configured backup GitHub repository 'acme/private-shellshelf'",
+        "Configured personal GitHub repository 'acme/private-shellshelf'",
     ));
 
     let value: serde_json::Value =
@@ -1932,7 +1936,7 @@ fn test_add_backup_repo_writes_github_backup_repo_config_from_url() {
     assert_eq!(
         value,
         serde_json::json!({
-            "backup_repo": {
+            "personal_repo": {
                 "mode": "github",
                 "github_repo": "acme/private-shellshelf"
             },
@@ -1946,18 +1950,18 @@ fn test_add_backup_repo_writes_github_backup_repo_config_from_url() {
 }
 
 #[test]
-fn test_add_backup_repo_rejects_combined_flags() {
+fn test_add_personal_repo_rejects_combined_flags() {
     let temp_dir = TempDir::new().unwrap();
     let mut cmd = Command::cargo_bin("shellshelf").unwrap();
 
     cmd.env("HOME", temp_dir.path()).args([
-        "--add-backup-repo",
+        "--add-personal-repo",
         "acme/private-shellshelf",
         "--list",
     ]);
 
     cmd.assert().failure().stderr(predicate::str::contains(
-        "--add-backup-repo must be used on its own.",
+        "--add-personal-repo must be used on its own.",
     ));
 }
 

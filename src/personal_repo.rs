@@ -1,30 +1,30 @@
-use crate::config::{validate_shelf_name, BackupStorageContext};
+use crate::config::{validate_shelf_name, PersonalStorageContext};
 use crate::Result;
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
-const BACKUP_SHELVES_DIR: &str = "shelves";
+const PERSONAL_SHELVES_DIR: &str = "shelves";
 
-pub(crate) fn backup_local_shelf(
-    backup_context: &BackupStorageContext,
+pub(crate) fn sync_personal_local_shelf(
+    personal_context: &PersonalStorageContext,
     local_data_file: &Path,
     shelf: &str,
 ) -> Result<bool> {
     validate_shelf_name(shelf)?;
-    sync_backup_repo(
-        backup_context,
+    sync_personal_repo(
+        personal_context,
         [(
             local_data_file.to_path_buf(),
-            backup_shelf_path(backup_context, shelf),
+            personal_shelf_path(personal_context, shelf),
         )],
-        format!("Backup local shelf '{shelf}'"),
+        format!("Sync personal shelf '{shelf}'"),
     )
 }
 
-pub(crate) fn sync_all_local_shelves(
-    backup_context: &BackupStorageContext,
+pub(crate) fn sync_all_personal_shelves(
+    personal_context: &PersonalStorageContext,
     local_shelves_root: &Path,
 ) -> Result<usize> {
     let mut sync_pairs = Vec::new();
@@ -53,7 +53,7 @@ pub(crate) fn sync_all_local_shelves(
                 continue;
             }
 
-            sync_pairs.push((path, backup_shelf_path(backup_context, &shelf)));
+            sync_pairs.push((path, personal_shelf_path(personal_context, &shelf)));
         }
     }
 
@@ -61,33 +61,36 @@ pub(crate) fn sync_all_local_shelves(
         return Ok(0);
     }
 
-    let changed = sync_backup_repo(
-        backup_context,
+    let changed = sync_personal_repo(
+        personal_context,
         sync_pairs,
-        "Sync local shelves backup".to_string(),
+        "Sync personal shelves".to_string(),
     )?;
 
     Ok(usize::from(changed))
 }
 
-pub(crate) fn backup_shelf_path(backup_context: &BackupStorageContext, shelf: &str) -> PathBuf {
-    backup_context
+pub(crate) fn personal_shelf_path(
+    personal_context: &PersonalStorageContext,
+    shelf: &str,
+) -> PathBuf {
+    personal_context
         .repository_root
-        .join(BACKUP_SHELVES_DIR)
+        .join(PERSONAL_SHELVES_DIR)
         .join(format!("{shelf}.json"))
 }
 
-fn sync_backup_repo(
-    backup_context: &BackupStorageContext,
+fn sync_personal_repo(
+    personal_context: &PersonalStorageContext,
     sync_pairs: impl IntoIterator<Item = (PathBuf, PathBuf)>,
     commit_message: String,
 ) -> Result<bool> {
-    ensure_clean_worktree(&backup_context.repository_root)?;
+    ensure_clean_worktree(&personal_context.repository_root)?;
 
-    let base_branch = detect_default_base_branch(&backup_context.repository_root)?;
-    switch_to_branch(&backup_context.repository_root, &base_branch)?;
+    let base_branch = detect_default_base_branch(&personal_context.repository_root)?;
+    switch_to_branch(&personal_context.repository_root, &base_branch)?;
     run_git(
-        &backup_context.repository_root,
+        &personal_context.repository_root,
         ["pull", "--ff-only", "origin", base_branch.as_str()],
     )?;
 
@@ -95,19 +98,19 @@ fn sync_backup_repo(
 
     for (source_path, target_path) in sync_pairs {
         let Some(parent) = target_path.parent() else {
-            return Err("Backup shelf path must have a parent directory.".into());
+            return Err("Personal shelf path must have a parent directory.".into());
         };
         fs::create_dir_all(parent)?;
         fs::copy(source_path, &target_path)?;
         changed_paths.push(target_path);
     }
 
-    if !paths_have_changes(&backup_context.repository_root, &changed_paths)? {
+    if !paths_have_changes(&personal_context.repository_root, &changed_paths)? {
         return Ok(false);
     }
 
     run_git_with_os_args(
-        &backup_context.repository_root,
+        &personal_context.repository_root,
         std::iter::once(OsString::from("add")).chain(
             changed_paths
                 .iter()
@@ -115,11 +118,11 @@ fn sync_backup_repo(
         ),
     )?;
     run_git(
-        &backup_context.repository_root,
+        &personal_context.repository_root,
         ["commit", "-m", commit_message.as_str()],
     )?;
     run_git(
-        &backup_context.repository_root,
+        &personal_context.repository_root,
         ["push", "origin", base_branch.as_str()],
     )?;
 
@@ -146,7 +149,7 @@ fn detect_default_base_branch(repo_root: &Path) -> Result<String> {
         }
     }
 
-    Err("Could not determine the backup repository base branch.".into())
+    Err("Could not determine the personal repository base branch.".into())
 }
 
 fn ensure_clean_worktree(repo_root: &Path) -> Result<()> {
@@ -155,7 +158,7 @@ fn ensure_clean_worktree(repo_root: &Path) -> Result<()> {
         Ok(())
     } else {
         Err(
-            "Backup repository checkout has uncommitted changes. Commit, stash, or discard them before syncing local shelves."
+            "Personal repository checkout has uncommitted changes. Commit, stash, or discard them before syncing local shelves."
                 .into(),
         )
     }
@@ -216,7 +219,7 @@ fn run_git(repo_root: &Path, args: impl IntoIterator<Item = impl AsRef<OsStr>>) 
         .arg(repo_root)
         .args(args)
         .output()
-        .map_err(|error| format!("Backup sync requires Git to be installed: {error}"))?;
+        .map_err(|error| format!("Personal sync requires Git to be installed: {error}"))?;
 
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
@@ -242,7 +245,7 @@ fn git_exit_status(
         .arg(repo_root)
         .args(args)
         .status()
-        .map_err(|error| format!("Backup sync requires Git to be installed: {error}").into())
+        .map_err(|error| format!("Personal sync requires Git to be installed: {error}").into())
 }
 
 fn git_binary() -> String {
