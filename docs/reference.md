@@ -15,7 +15,7 @@ The tap formula tracks the Cargo release version plus a Homebrew revision, so me
 On Linux, the project currently publishes a release tarball rather than distro-specific packages:
 
 ```bash
-VERSION="v0.2.6" # replace with the release you want
+VERSION="v0.2.7" # replace with the release you want
 curl -LO "https://github.com/vcali/shellshelf/releases/download/${VERSION}/shellshelf-x86_64-unknown-linux-gnu.tar.gz"
 curl -LO "https://github.com/vcali/shellshelf/releases/download/${VERSION}/shellshelf-x86_64-unknown-linux-gnu.tar.gz.sha256"
 sha256sum --check shellshelf-x86_64-unknown-linux-gnu.tar.gz.sha256
