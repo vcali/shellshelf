@@ -45,6 +45,12 @@ pub(crate) enum SaveCommandOutcome {
     Duplicate,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct MergeDatabaseOutcome {
+    pub(crate) duplicate_commands_removed: usize,
+    pub(crate) descriptions_upgraded: usize,
+}
+
 impl CommandDatabase {
     pub(crate) fn new() -> Self {
         Self {
@@ -120,6 +126,21 @@ impl CommandDatabase {
         }
     }
 
+    pub(crate) fn merged_with(&self, other: &Self) -> (Self, MergeDatabaseOutcome) {
+        let mut merged = Self::new();
+        let mut outcome = MergeDatabaseOutcome::default();
+
+        for command in &self.commands {
+            merge_command_into(&mut merged, command, &mut outcome);
+        }
+
+        for command in &other.commands {
+            merge_command_into(&mut merged, command, &mut outcome);
+        }
+
+        (merged, outcome)
+    }
+
     pub(crate) fn search_in_shelf(&self, keywords: &[String], shelf: &str) -> Vec<&StoredCommand> {
         self.search_with_shelf_context(keywords, Some(shelf))
     }
@@ -158,9 +179,53 @@ impl CommandDatabase {
     }
 }
 
+fn merge_command_into(
+    merged: &mut CommandDatabase,
+    candidate: &StoredCommand,
+    outcome: &mut MergeDatabaseOutcome,
+) {
+    if let Some(existing) = merged
+        .commands
+        .iter_mut()
+        .find(|existing| existing.command == candidate.command)
+    {
+        outcome.duplicate_commands_removed += 1;
+        let merged_description = merge_descriptions(
+            existing.description.as_deref(),
+            candidate.description.as_deref(),
+        );
+        if existing.description != merged_description {
+            outcome.descriptions_upgraded += 1;
+            *existing = StoredCommand::new(existing.command.clone(), merged_description);
+        }
+    } else {
+        merged.commands.push(StoredCommand::new(
+            candidate.command.clone(),
+            candidate.description.clone(),
+        ));
+    }
+}
+
+fn merge_descriptions(primary: Option<&str>, secondary: Option<&str>) -> Option<String> {
+    let normalize = |value: Option<&str>| {
+        value
+            .map(str::trim)
+            .filter(|trimmed| !trimmed.is_empty())
+            .map(str::to_string)
+    };
+
+    match (normalize(primary), normalize(secondary)) {
+        (None, None) => None,
+        (Some(description), None) | (None, Some(description)) => Some(description),
+        (Some(primary), Some(secondary)) if primary == secondary => Some(primary),
+        (Some(primary), Some(secondary)) if secondary.len() > primary.len() => Some(secondary),
+        (Some(primary), Some(_secondary)) => Some(primary),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{CommandDatabase, SaveCommandOutcome, StoredCommand};
+    use super::{CommandDatabase, MergeDatabaseOutcome, SaveCommandOutcome, StoredCommand};
     use tempfile::TempDir;
 
     #[test]
@@ -400,5 +465,79 @@ mod tests {
             1
         );
         assert_eq!(db.search_in_shelf(&["hub".to_string()], "default").len(), 1);
+    }
+
+    #[test]
+    fn test_command_database_merged_with_deduplicates_and_upgrades_description() {
+        let local = CommandDatabase {
+            commands: vec![
+                StoredCommand::new(
+                    "curl https://example.com".to_string(),
+                    Some("Short".to_string()),
+                ),
+                StoredCommand::new("git status".to_string(), None),
+            ],
+        };
+        let remote = CommandDatabase {
+            commands: vec![
+                StoredCommand::new(
+                    "curl https://example.com".to_string(),
+                    Some("Longer curl description".to_string()),
+                ),
+                StoredCommand::new("aws s3 ls".to_string(), Some("List buckets".to_string())),
+            ],
+        };
+
+        let (merged, outcome) = local.merged_with(&remote);
+
+        assert_eq!(
+            merged.commands,
+            vec![
+                StoredCommand::new(
+                    "curl https://example.com".to_string(),
+                    Some("Longer curl description".to_string()),
+                ),
+                StoredCommand::new("git status".to_string(), None),
+                StoredCommand::new("aws s3 ls".to_string(), Some("List buckets".to_string())),
+            ]
+        );
+        assert_eq!(
+            outcome,
+            MergeDatabaseOutcome {
+                duplicate_commands_removed: 1,
+                descriptions_upgraded: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn test_command_database_merged_with_prefers_first_description_when_lengths_match() {
+        let local = CommandDatabase {
+            commands: vec![StoredCommand::new(
+                "curl https://example.com".to_string(),
+                Some("Local text".to_string()),
+            )],
+        };
+        let remote = CommandDatabase {
+            commands: vec![StoredCommand::new(
+                "curl https://example.com".to_string(),
+                Some("Remote txt".to_string()),
+            )],
+        };
+
+        let (merged, outcome) = local.merged_with(&remote);
+
+        assert_eq!(merged.commands.len(), 1);
+        assert_eq!(
+            merged.commands[0].description.as_deref(),
+            Some("Local text")
+        );
+        assert_eq!(
+            outcome,
+            MergeDatabaseOutcome {
+                duplicate_commands_removed: 1,
+                descriptions_upgraded: 0,
+            }
+        );
     }
 }

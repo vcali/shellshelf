@@ -52,8 +52,9 @@ Connect a private GitHub-backed personal repo for your shelves:
 
 ```bash
 shellshelf --add-personal-repo https://github.com/acme/private-shellshelf.git
-shellshelf --sync-personal
 ```
+
+`--add-personal-repo` now bootstraps non-interactively by default: it seeds an empty personal repo from local shelves, imports from the repo when local shelves are empty, and merges matching shelf files command-by-command when both sides already have data.
 
 Search shared team shelves:
 
@@ -265,6 +266,17 @@ shellshelf --add-repo acme/shared-shellshelf
 ```
 
 Once a shared repo is configured, default read commands include local shelves plus all teams unless you explicitly narrow with `--team`, `--all-teams`, `--local-only`, `--shared-only`, or `shared_repo.default_team`.
+
+For personal repos, you can override the default add-time bootstrap behavior with:
+
+```bash
+shellshelf --add-personal-repo acme/private-shellshelf --personal-repo-bootstrap skip
+shellshelf --add-personal-repo acme/private-shellshelf --personal-repo-bootstrap merge
+shellshelf --add-personal-repo acme/private-shellshelf --personal-repo-bootstrap push
+shellshelf --add-personal-repo acme/private-shellshelf --personal-repo-bootstrap pull
+```
+
+If the managed personal checkout later drifts ahead of, behind, or diverges from `origin`, `shellshelf` prints warning lines with ready-to-run `git` commands for push/pull and an `Inspect:` command that shows the commit and diff overview. Those remote-status checks re-fetch at most once per `personal_repo.sync_check_interval_minutes` and default to 30 minutes.
 
 ## Documentation
 

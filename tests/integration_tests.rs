@@ -187,6 +187,10 @@ fn write_mock_gh(temp_dir: &Path) -> (PathBuf, PathBuf) {
             "@echo off\r\n\
 setlocal\r\n\
 echo %*>> \"{}\"\r\n\
+if not \"%SHELLSHELF_TEST_GH_CLONE_SOURCE%\"==\"\" (\r\n\
+  git clone \"%SHELLSHELF_TEST_GH_CLONE_SOURCE%\" \"%4\" >nul 2>nul\r\n\
+  exit /b %ERRORLEVEL%\r\n\
+)\r\n\
 mkdir \"%4\" >nul 2>nul\r\n",
             log_path.display()
         )
@@ -194,6 +198,10 @@ mkdir \"%4\" >nul 2>nul\r\n",
         format!(
             "#!/bin/sh\n\
 printf '%s\\n' \"$@\" >> \"{}\"\n\
+if [ -n \"$SHELLSHELF_TEST_GH_CLONE_SOURCE\" ]; then\n\
+  git clone \"$SHELLSHELF_TEST_GH_CLONE_SOURCE\" \"$4\" >/dev/null 2>&1\n\
+  exit $?\n\
+fi\n\
 mkdir -p \"$4\"\n",
             log_path.display()
         )
@@ -588,6 +596,25 @@ fn init_managed_checkout_repo(temp_dir: &Path, checkout_path: &Path) {
     );
 }
 
+fn init_empty_managed_checkout_repo(temp_dir: &Path, checkout_path: &Path) {
+    let origin_path = temp_dir.join("origin.git");
+
+    run_git_command(temp_dir, &["init", "--bare", origin_path.to_str().unwrap()]);
+    run_git_command(
+        temp_dir,
+        &[
+            "clone",
+            origin_path.to_str().unwrap(),
+            checkout_path.to_str().unwrap(),
+        ],
+    );
+    run_git_command(checkout_path, &["config", "user.name", "Shellshelf Tests"]);
+    run_git_command(
+        checkout_path,
+        &["config", "user.email", "shellshelf-tests@example.com"],
+    );
+}
+
 #[test]
 fn test_help_output() {
     let mut cmd = Command::cargo_bin("shellshelf").unwrap();
@@ -605,6 +632,7 @@ fn test_help_output() {
         .stdout(predicate::str::contains("--web-port"))
         .stdout(predicate::str::contains("--force-sync"))
         .stdout(predicate::str::contains("--add-personal-repo"))
+        .stdout(predicate::str::contains("--personal-repo-bootstrap"))
         .stdout(predicate::str::contains("--force-sync-personal"))
         .stdout(predicate::str::contains("--sync-personal"));
 }
@@ -730,6 +758,54 @@ fn test_add_local_command_updates_personal_repo() {
     assert!(read_git_output(
         &home_dir.join("origin.git"),
         &["show", "HEAD:shelves/curl.json"],
+    )
+    .contains("curl https://example.com/personal"));
+}
+
+#[test]
+fn test_add_local_command_initializes_empty_managed_personal_repo() {
+    let temp_dir = TempDir::new().unwrap();
+    let home_dir = temp_dir.path();
+    let shellshelf_dir = home_dir.join(".shellshelf");
+    let config_path = shellshelf_dir.join("config.json");
+    let personal_repo = shellshelf_dir
+        .join("repos")
+        .join("acme__private-shellshelf");
+
+    fs::create_dir_all(&shellshelf_dir).unwrap();
+    init_empty_managed_checkout_repo(home_dir, &personal_repo);
+    write_text_file(
+        &config_path,
+        r#"{
+  "default_shelf": "curl",
+  "personal_repo": {
+    "github_repo": "acme/private-shellshelf",
+    "auto_update_repo": false
+  }
+}"#,
+    );
+
+    let base_branch = read_git_output(&personal_repo, &["branch", "--show-current"]);
+    assert!(!base_branch.is_empty());
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", home_dir)
+        .env("GIT_AUTHOR_NAME", "Shellshelf Tests")
+        .env("GIT_AUTHOR_EMAIL", "shellshelf-tests@example.com")
+        .env("GIT_COMMITTER_NAME", "Shellshelf Tests")
+        .env("GIT_COMMITTER_EMAIL", "shellshelf-tests@example.com")
+        .args(["--add", "curl https://example.com/personal"]);
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Updated personal sync for local shelf 'curl'.",
+        ))
+        .stderr(predicate::str::is_empty());
+
+    assert!(read_git_output(
+        &home_dir.join("origin.git"),
+        &["show", &format!("{base_branch}:shelves/curl.json")],
     )
     .contains("curl https://example.com/personal"));
 }
@@ -1904,6 +1980,7 @@ fn test_add_personal_repo_writes_github_personal_repo_config_from_url() {
     let home_dir = temp_dir.path();
     let shellshelf_dir = home_dir.join(".shellshelf");
     let config_path = shellshelf_dir.join("config.json");
+    let (gh_path, _) = write_mock_gh(home_dir);
 
     fs::create_dir_all(&shellshelf_dir).unwrap();
     write_text_file(
@@ -1922,10 +1999,14 @@ fn test_add_personal_repo_writes_github_personal_repo_config_from_url() {
     );
 
     let mut cmd = Command::cargo_bin("shellshelf").unwrap();
-    cmd.env("HOME", home_dir).args([
-        "--add-personal-repo",
-        "https://github.com/acme/private-shellshelf.git",
-    ]);
+    cmd.env("HOME", home_dir)
+        .env("SHELLSHELF_GH_BIN", &gh_path)
+        .args([
+            "--add-personal-repo",
+            "https://github.com/acme/private-shellshelf.git",
+            "--personal-repo-bootstrap",
+            "skip",
+        ]);
 
     cmd.assert().success().stdout(predicate::str::contains(
         "Configured personal GitHub repository 'acme/private-shellshelf'",
@@ -1937,7 +2018,6 @@ fn test_add_personal_repo_writes_github_personal_repo_config_from_url() {
         value,
         serde_json::json!({
             "personal_repo": {
-                "mode": "github",
                 "github_repo": "acme/private-shellshelf"
             },
             "default_shelf": "curl",
@@ -1947,6 +2027,143 @@ fn test_add_personal_repo_writes_github_personal_repo_config_from_url() {
             }
         })
     );
+}
+
+#[test]
+fn test_add_personal_repo_auto_pushes_into_empty_repo() {
+    let temp_dir = TempDir::new().unwrap();
+    let home_dir = temp_dir.path();
+    let shellshelf_dir = home_dir.join(".shellshelf");
+    let config_path = shellshelf_dir.join("config.json");
+    let origin_path = home_dir.join("origin.git");
+    let (gh_path, _) = write_mock_gh(home_dir);
+
+    fs::create_dir_all(shellshelf_dir.join("shelves")).unwrap();
+    run_git_command(home_dir, &["init", "--bare", origin_path.to_str().unwrap()]);
+    write_command_database(
+        &shellshelf_dir.join("shelves").join("curl.json"),
+        &[(
+            "curl https://example.com/personal",
+            Some("Personal command"),
+        )],
+    );
+    write_text_file(
+        &config_path,
+        r#"{
+  "default_shelf": "curl"
+}"#,
+    );
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", home_dir)
+        .env("SHELLSHELF_GH_BIN", &gh_path)
+        .env("SHELLSHELF_TEST_GH_CLONE_SOURCE", &origin_path)
+        .env("GIT_AUTHOR_NAME", "Shellshelf Tests")
+        .env("GIT_AUTHOR_EMAIL", "shellshelf-tests@example.com")
+        .env("GIT_COMMITTER_NAME", "Shellshelf Tests")
+        .env("GIT_COMMITTER_EMAIL", "shellshelf-tests@example.com")
+        .args(["--add-personal-repo", "acme/private-shellshelf"]);
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Configured personal GitHub repository 'acme/private-shellshelf'",
+        ))
+        .stdout(predicate::str::contains(
+            "Seeded the personal repository from local shelves.",
+        ));
+
+    assert!(
+        read_git_output(&origin_path, &["show", "main:shelves/curl.json"])
+            .contains("curl https://example.com/personal")
+    );
+}
+
+#[test]
+fn test_add_personal_repo_auto_merges_conflicting_shelves() {
+    let temp_dir = TempDir::new().unwrap();
+    let home_dir = temp_dir.path();
+    let shellshelf_dir = home_dir.join(".shellshelf");
+    let config_path = shellshelf_dir.join("config.json");
+    let origin_path = home_dir.join("origin.git");
+    let seed_path = home_dir.join("seed");
+    let (gh_path, _) = write_mock_gh(home_dir);
+
+    fs::create_dir_all(shellshelf_dir.join("shelves")).unwrap();
+    write_command_database(
+        &shellshelf_dir.join("shelves").join("curl.json"),
+        &[
+            (
+                "curl https://shared.example.com",
+                Some("Local description with more detail"),
+            ),
+            ("curl https://local.example.com", Some("Local command")),
+        ],
+    );
+    write_text_file(
+        &config_path,
+        r#"{
+  "default_shelf": "curl"
+}"#,
+    );
+
+    run_git_command(home_dir, &["init", "--bare", origin_path.to_str().unwrap()]);
+    run_git_command(home_dir, &["init", seed_path.to_str().unwrap()]);
+    run_git_command(&seed_path, &["config", "user.name", "Shellshelf Tests"]);
+    run_git_command(
+        &seed_path,
+        &["config", "user.email", "shellshelf-tests@example.com"],
+    );
+    write_command_database(
+        &seed_path.join("shelves").join("curl.json"),
+        &[
+            ("curl https://shared.example.com", Some("Remote desc")),
+            ("curl https://remote.example.com", Some("Remote command")),
+        ],
+    );
+    run_git_command(&seed_path, &["add", "."]);
+    run_git_command(&seed_path, &["commit", "-m", "Initial personal shelves"]);
+    run_git_command(&seed_path, &["branch", "-M", "main"]);
+    run_git_command(
+        &seed_path,
+        &["remote", "add", "origin", origin_path.to_str().unwrap()],
+    );
+    run_git_command(&seed_path, &["push", "-u", "origin", "main"]);
+    run_git_command(&origin_path, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", home_dir)
+        .env("SHELLSHELF_GH_BIN", &gh_path)
+        .env("SHELLSHELF_TEST_GH_CLONE_SOURCE", &origin_path)
+        .args(["--add-personal-repo", "acme/private-shellshelf"]);
+
+    cmd.assert().success().stdout(predicate::str::contains(
+        "Merged local shelves with the personal repository.",
+    ));
+
+    let merged_local: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(shellshelf_dir.join("shelves").join("curl.json")).unwrap(),
+    )
+    .unwrap();
+    let merged_remote: serde_json::Value = serde_json::from_str(&read_git_output(
+        &origin_path,
+        &["show", "main:shelves/curl.json"],
+    ))
+    .unwrap();
+
+    assert_eq!(merged_local, merged_remote);
+    let commands = merged_local["commands"].as_array().unwrap();
+    assert_eq!(commands.len(), 3);
+    assert_eq!(
+        commands[0]["description"].as_str(),
+        Some("Local description with more detail")
+    );
+    assert!(commands
+        .iter()
+        .any(|command| { command["command"].as_str() == Some("curl https://local.example.com") }));
+    assert!(commands
+        .iter()
+        .any(|command| { command["command"].as_str() == Some("curl https://remote.example.com") }));
 }
 
 #[test]
@@ -1963,6 +2180,199 @@ fn test_add_personal_repo_rejects_combined_flags() {
     cmd.assert().failure().stderr(predicate::str::contains(
         "--add-personal-repo must be used on its own.",
     ));
+}
+
+#[test]
+fn test_personal_repo_bootstrap_requires_add_personal_repo() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+
+    cmd.env("HOME", temp_dir.path())
+        .args(["--personal-repo-bootstrap", "push", "--list"]);
+
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "--personal-repo-bootstrap can only be used with --add-personal-repo.",
+    ));
+}
+
+#[test]
+fn test_personal_repo_warning_when_checkout_is_ahead_of_remote() {
+    let temp_dir = TempDir::new().unwrap();
+    let home_dir = temp_dir.path();
+    let config_path = home_dir.join(".shellshelf").join("config.json");
+    let personal_repo = home_dir
+        .join(".shellshelf")
+        .join("repos")
+        .join("acme__private-shellshelf");
+
+    fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    init_managed_checkout_repo(home_dir, &personal_repo);
+    write_text_file(
+        &config_path,
+        r#"{
+  "default_shelf": "curl",
+  "personal_repo": {
+    "github_repo": "acme/private-shellshelf",
+    "auto_update_repo": false
+  }
+}"#,
+    );
+    write_command_database(
+        &personal_repo.join("shelves").join("curl.json"),
+        &[("curl https://ahead.example.com", Some("Ahead command"))],
+    );
+    run_git_command(&personal_repo, &["add", "."]);
+    run_git_command(&personal_repo, &["commit", "-m", "Ahead commit"]);
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", home_dir).arg("--list-shelves");
+
+    cmd.assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "Warning: the managed personal repository checkout is ahead of origin by 1 commit(s).",
+        ))
+        .stderr(predicate::str::contains("Push: git -C "))
+        .stderr(predicate::str::contains("push origin main"))
+        .stderr(predicate::str::contains("Inspect: git -C "))
+        .stderr(predicate::str::contains(
+            "log --oneline --left-right --cherry main...origin/main",
+        ))
+        .stderr(predicate::str::contains("diff --stat main...origin/main"));
+}
+
+#[test]
+fn test_personal_repo_warning_when_checkout_is_behind_remote() {
+    let temp_dir = TempDir::new().unwrap();
+    let home_dir = temp_dir.path();
+    let config_path = home_dir.join(".shellshelf").join("config.json");
+    let personal_repo = home_dir
+        .join(".shellshelf")
+        .join("repos")
+        .join("acme__private-shellshelf");
+    let seed_path = home_dir.join("seed-behind");
+
+    fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    init_managed_checkout_repo(home_dir, &personal_repo);
+    write_text_file(
+        &config_path,
+        r#"{
+  "default_shelf": "curl",
+  "personal_repo": {
+    "github_repo": "acme/private-shellshelf",
+    "auto_update_repo": false
+  }
+}"#,
+    );
+
+    run_git_command(
+        home_dir,
+        &[
+            "clone",
+            home_dir.join("origin.git").to_str().unwrap(),
+            seed_path.to_str().unwrap(),
+        ],
+    );
+    run_git_command(&seed_path, &["config", "user.name", "Shellshelf Tests"]);
+    run_git_command(
+        &seed_path,
+        &["config", "user.email", "shellshelf-tests@example.com"],
+    );
+    write_command_database(
+        &seed_path.join("shelves").join("curl.json"),
+        &[("curl https://behind.example.com", Some("Behind command"))],
+    );
+    run_git_command(&seed_path, &["add", "."]);
+    run_git_command(&seed_path, &["commit", "-m", "Behind commit"]);
+    run_git_command(&seed_path, &["push", "origin", "main"]);
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", home_dir).arg("--list-shelves");
+
+    cmd.assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "Warning: the managed personal repository checkout is behind origin by 1 commit(s).",
+        ))
+        .stderr(predicate::str::contains("Pull: git -C "))
+        .stderr(predicate::str::contains("pull --ff-only origin main"))
+        .stderr(predicate::str::contains("Inspect: git -C "))
+        .stderr(predicate::str::contains(
+            "log --oneline --left-right --cherry main...origin/main",
+        ))
+        .stderr(predicate::str::contains("diff --stat main...origin/main"));
+}
+
+#[test]
+fn test_personal_repo_warning_reuses_cached_remote_status_until_interval_expires() {
+    let temp_dir = TempDir::new().unwrap();
+    let home_dir = temp_dir.path();
+    let config_path = home_dir.join(".shellshelf").join("config.json");
+    let personal_repo = home_dir
+        .join(".shellshelf")
+        .join("repos")
+        .join("acme__private-shellshelf");
+    let seed_path = home_dir.join("seed-cached-behind");
+
+    fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    init_managed_checkout_repo(home_dir, &personal_repo);
+    write_text_file(
+        &config_path,
+        r#"{
+  "default_shelf": "curl",
+  "personal_repo": {
+    "github_repo": "acme/private-shellshelf",
+    "auto_update_repo": false,
+    "sync_check_interval_minutes": 60
+  }
+}"#,
+    );
+
+    run_git_command(
+        home_dir,
+        &[
+            "clone",
+            home_dir.join("origin.git").to_str().unwrap(),
+            seed_path.to_str().unwrap(),
+        ],
+    );
+    run_git_command(&seed_path, &["config", "user.name", "Shellshelf Tests"]);
+    run_git_command(
+        &seed_path,
+        &["config", "user.email", "shellshelf-tests@example.com"],
+    );
+    write_command_database(
+        &seed_path.join("shelves").join("curl.json"),
+        &[("curl https://behind-one.example.com", Some("Behind one"))],
+    );
+    run_git_command(&seed_path, &["add", "."]);
+    run_git_command(&seed_path, &["commit", "-m", "Behind commit 1"]);
+    run_git_command(&seed_path, &["push", "origin", "main"]);
+
+    let mut first = Command::cargo_bin("shellshelf").unwrap();
+    first.env("HOME", home_dir).arg("--list-shelves");
+    first.assert().success().stderr(predicate::str::contains(
+        "Warning: the managed personal repository checkout is behind origin by 1 commit(s).",
+    ));
+
+    write_command_database(
+        &seed_path.join("shelves").join("git.json"),
+        &[("git status", Some("Behind two"))],
+    );
+    run_git_command(&seed_path, &["add", "."]);
+    run_git_command(&seed_path, &["commit", "-m", "Behind commit 2"]);
+    run_git_command(&seed_path, &["push", "origin", "main"]);
+
+    let mut second = Command::cargo_bin("shellshelf").unwrap();
+    second.env("HOME", home_dir).arg("--list-shelves");
+    second
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "Warning: the managed personal repository checkout is behind origin by 1 commit(s).",
+        ))
+        .stderr(predicate::str::contains("Inspect: git -C "))
+        .stderr(predicate::str::contains("pull --ff-only origin main"));
 }
 
 #[test]

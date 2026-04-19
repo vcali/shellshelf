@@ -18,6 +18,7 @@ const PERSONAL_REPOSITORY_REQUIRED_MESSAGE: &str =
     "No personal repository configured. Configure personal_repo in config.";
 const SHELVES_DIR_NAME: &str = "shelves";
 pub(crate) const BUILTIN_DEFAULT_SHELF: &str = "default";
+pub(crate) const DEFAULT_PERSONAL_REPO_SYNC_CHECK_INTERVAL_MINUTES: u64 = 30;
 const LEGACY_SHARED_REPO_CONFIG_KEYS: &[&str] = &[
     "github_repo",
     "shared_repo_path",
@@ -102,6 +103,7 @@ pub(crate) struct GithubPersonalRepoConfig {
     pub(crate) github_repo: String,
     pub(crate) auto_update_repo: bool,
     pub(crate) auto_update_interval_minutes: u64,
+    pub(crate) sync_check_interval_minutes: u64,
 }
 
 #[derive(Deserialize)]
@@ -140,11 +142,12 @@ struct RawSharedRepoConfig {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawPersonalRepoConfig {
-    mode: String,
+    mode: Option<String>,
     path: Option<PathBuf>,
     github_repo: Option<String>,
     auto_update_repo: Option<bool>,
     auto_update_interval_minutes: Option<u64>,
+    sync_check_interval_minutes: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -158,6 +161,7 @@ pub(crate) struct SharedStorageContext {
 pub(crate) struct PersonalStorageContext {
     pub(crate) repository_root: PathBuf,
     pub(crate) managed_github_repo: Option<String>,
+    pub(crate) sync_check_interval: Option<Duration>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -237,6 +241,10 @@ impl GithubSharedRepoConfig {
 impl GithubPersonalRepoConfig {
     fn auto_update_interval(&self) -> Duration {
         Duration::from_secs(self.auto_update_interval_minutes.saturating_mul(60))
+    }
+
+    pub(crate) fn sync_check_interval(&self) -> Duration {
+        Duration::from_secs(self.sync_check_interval_minutes.saturating_mul(60))
     }
 }
 
@@ -381,7 +389,7 @@ impl TryFrom<RawPersonalRepoConfig> for PersonalRepoConfig {
     type Error = Box<dyn std::error::Error>;
 
     fn try_from(value: RawPersonalRepoConfig) -> Result<Self> {
-        match value.mode.as_str() {
+        match resolve_personal_repo_mode(&value)? {
             "path" => {
                 let path = value
                     .path
@@ -412,6 +420,13 @@ impl TryFrom<RawPersonalRepoConfig> for PersonalRepoConfig {
                     );
                 }
 
+                if value.sync_check_interval_minutes.is_some() {
+                    return Err(
+                        "personal_repo.sync_check_interval_minutes is only valid when personal_repo.mode is 'github'."
+                            .into(),
+                    );
+                }
+
                 Ok(PersonalRepoConfig::Path(PathPersonalRepoConfig { path }))
             }
             "github" => {
@@ -437,14 +452,44 @@ impl TryFrom<RawPersonalRepoConfig> for PersonalRepoConfig {
                     );
                 }
 
+                let sync_check_interval_minutes = value
+                    .sync_check_interval_minutes
+                    .unwrap_or(DEFAULT_PERSONAL_REPO_SYNC_CHECK_INTERVAL_MINUTES);
+
+                if sync_check_interval_minutes == 0 {
+                    return Err(
+                        "personal_repo.sync_check_interval_minutes must be greater than 0.".into(),
+                    );
+                }
+
                 Ok(PersonalRepoConfig::Github(GithubPersonalRepoConfig {
                     github_repo,
                     auto_update_repo: value.auto_update_repo.unwrap_or(true),
                     auto_update_interval_minutes,
+                    sync_check_interval_minutes,
                 }))
             }
             _ => Err("personal_repo.mode must be either 'path' or 'github'.".into()),
         }
+    }
+}
+
+fn resolve_personal_repo_mode(value: &RawPersonalRepoConfig) -> Result<&str> {
+    match value.mode.as_deref() {
+        Some("path") => Ok("path"),
+        Some("github") => Ok("github"),
+        Some(_) => Err("personal_repo.mode must be either 'path' or 'github'.".into()),
+        None => match (value.path.is_some(), value.github_repo.is_some()) {
+            (true, false) => Ok("path"),
+            (false, true) => Ok("github"),
+            (true, true) => {
+                Err("personal_repo.path cannot be combined with personal_repo.github_repo.".into())
+            }
+            (false, false) => Err(
+                "personal_repo must set either personal_repo.path or personal_repo.github_repo."
+                    .into(),
+            ),
+        },
     }
 }
 
@@ -700,14 +745,12 @@ fn personal_repo_to_json_map(personal_repo: &PersonalRepoConfig) -> serde_json::
 
     match personal_repo {
         PersonalRepoConfig::Path(config) => {
-            object.insert("mode".to_string(), Value::String("path".to_string()));
             object.insert(
                 "path".to_string(),
                 Value::String(config.path.display().to_string()),
             );
         }
         PersonalRepoConfig::Github(config) => {
-            object.insert("mode".to_string(), Value::String("github".to_string()));
             object.insert(
                 "github_repo".to_string(),
                 Value::String(config.github_repo.clone()),
@@ -721,6 +764,14 @@ fn personal_repo_to_json_map(personal_repo: &PersonalRepoConfig) -> serde_json::
                 object.insert(
                     "auto_update_interval_minutes".to_string(),
                     Value::Number(config.auto_update_interval_minutes.into()),
+                );
+            }
+            if config.sync_check_interval_minutes
+                != DEFAULT_PERSONAL_REPO_SYNC_CHECK_INTERVAL_MINUTES
+            {
+                object.insert(
+                    "sync_check_interval_minutes".to_string(),
+                    Value::Number(config.sync_check_interval_minutes.into()),
                 );
             }
         }
@@ -838,8 +889,8 @@ pub(crate) fn resolve_personal_storage_context(
         return Ok(None);
     };
 
-    let (repository_root, managed_github_repo) = match personal_repo {
-        PersonalRepoConfig::Path(path_config) => (path_config.path.clone(), None),
+    let (repository_root, managed_github_repo, sync_check_interval) = match personal_repo {
+        PersonalRepoConfig::Path(path_config) => (path_config.path.clone(), None, None),
         PersonalRepoConfig::Github(github_config) => {
             let (checkout_path, was_cloned) =
                 ensure_github_repo_checkout(&github_config.github_repo)?;
@@ -859,13 +910,18 @@ pub(crate) fn resolve_personal_storage_context(
                 }
             }
 
-            (checkout_path, Some(github_config.github_repo.clone()))
+            (
+                checkout_path,
+                Some(github_config.github_repo.clone()),
+                Some(github_config.sync_check_interval()),
+            )
         }
     };
 
     Ok(Some(PersonalStorageContext {
         repository_root,
         managed_github_repo,
+        sync_check_interval,
     }))
 }
 
@@ -1078,7 +1134,7 @@ mod tests {
         validate_relative_directory, validate_shelf_name, write_config, DefaultSharedReadTarget,
         GithubPersonalRepoConfig, GithubSharedRepoConfig, PathSharedRepoConfig, PersonalRepoConfig,
         SharedRepoConfig, SharedStorageContext, ShellshelfConfig, WebConfig, WebTheme,
-        BUILTIN_DEFAULT_SHELF,
+        BUILTIN_DEFAULT_SHELF, DEFAULT_PERSONAL_REPO_SYNC_CHECK_INTERVAL_MINUTES,
     };
     use crate::cli::build_cli;
     use crate::github::DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES;
@@ -1339,7 +1395,6 @@ mod tests {
             &temp_dir,
             serde_json::json!({
                 "personal_repo": {
-                    "mode": "github",
                     "github_repo": "acme/private-shellshelf"
                 }
             }),
@@ -1355,6 +1410,7 @@ mod tests {
                     github_repo: "acme/private-shellshelf".to_string(),
                     auto_update_repo: true,
                     auto_update_interval_minutes: DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES,
+                    sync_check_interval_minutes: DEFAULT_PERSONAL_REPO_SYNC_CHECK_INTERVAL_MINUTES,
                 })),
                 default_list_limit: None,
                 default_shelf: None,
@@ -1551,6 +1607,7 @@ mod tests {
                 github_repo: "acme/private-shellshelf".to_string(),
                 auto_update_repo: false,
                 auto_update_interval_minutes: 30,
+                sync_check_interval_minutes: 45,
             })),
             default_list_limit: Some(50),
             default_shelf: Some("curl".to_string()),
@@ -1575,10 +1632,10 @@ mod tests {
                     "auto_update_interval_minutes": 30
                 },
                 "personal_repo": {
-                    "mode": "github",
                     "github_repo": "acme/private-shellshelf",
                     "auto_update_repo": false,
-                    "auto_update_interval_minutes": 30
+                    "auto_update_interval_minutes": 30,
+                    "sync_check_interval_minutes": 45
                 },
                 "default_list_limit": 50,
                 "default_shelf": "curl",

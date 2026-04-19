@@ -8,12 +8,17 @@ use crate::config::{
     resolve_shared_storage_context_with_options, shared_repository_required_message, write_config,
     DefaultSharedReadTarget, GithubPersonalRepoConfig, GithubSharedRepoConfig, PersonalRepoConfig,
     PersonalStorageContext, SharedRepoConfig, SharedStorageContext, ShellshelfConfig,
+    DEFAULT_PERSONAL_REPO_SYNC_CHECK_INTERVAL_MINUTES,
 };
 use crate::database::{CommandDatabase, StoredCommand};
 use crate::github::{
     normalize_github_repo_input, DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES,
 };
-use crate::personal_repo::{sync_all_personal_shelves, sync_personal_local_shelf};
+use crate::personal_repo::{
+    bootstrap_personal_repo, personal_repo_sync_warning, sync_all_personal_shelves,
+    sync_personal_local_shelf, PersonalRepoBootstrapMode, PersonalRepoBootstrapOutcome,
+    PersonalRepoSyncWarning,
+};
 use crate::postman_import::{import_postman_collection, PostmanImportOutcome};
 use crate::shared_repo_publish::{
     prepare_publish_branch, publish_pull_request, restore_managed_checkout_to_base_branch,
@@ -154,6 +159,10 @@ pub fn run() -> Result<()> {
     validate_matches(&matches)?;
     let add_repo = matches.get_one::<String>("add-repo");
     let add_personal_repo = matches.get_one::<String>("add-personal-repo");
+    let personal_repo_bootstrap = matches
+        .get_one::<String>("personal-repo-bootstrap")
+        .map(String::as_str)
+        .unwrap_or("auto");
     let add_command = matches.get_one::<String>("add");
     let force_sync = matches.get_flag("force-sync");
     let force_sync_personal = matches.get_flag("force-sync-personal");
@@ -168,13 +177,22 @@ pub fn run() -> Result<()> {
         return configure_shared_repo(&config_path, &config, repo_input);
     }
     if let Some(repo_input) = add_personal_repo {
-        return configure_personal_repo(&config_path, &config, repo_input);
+        return configure_personal_repo(
+            &config_path,
+            &config,
+            repo_input,
+            parse_personal_repo_bootstrap_mode(personal_repo_bootstrap)?,
+        );
     }
 
     let all_teams = matches.get_flag("all-teams");
     let shared_context =
         resolve_shared_storage_context_with_options(&matches, &config, force_sync)?;
     let personal_context = resolve_personal_storage_context(&config, force_sync_personal)?;
+
+    if !force_sync_personal && !sync_personal {
+        emit_personal_repo_sync_warning(personal_context.as_ref());
+    }
 
     if force_sync {
         return run_force_sync(shared_context.as_ref());
@@ -524,23 +542,29 @@ fn configure_personal_repo(
     config_path: &Path,
     config: &ShellshelfConfig,
     repo_input: &str,
+    bootstrap_mode: PersonalRepoBootstrapMode,
 ) -> Result<()> {
     let github_repo = normalize_github_repo_input(repo_input)?;
-    let (auto_update_repo, auto_update_interval) = match config.personal_repo.as_ref() {
-        Some(PersonalRepoConfig::Github(existing)) => (
-            existing.auto_update_repo,
-            existing.auto_update_interval_minutes,
-        ),
-        Some(PersonalRepoConfig::Path(_)) | None => {
-            (true, DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES)
-        }
-    };
+    let (auto_update_repo, auto_update_interval, sync_check_interval) =
+        match config.personal_repo.as_ref() {
+            Some(PersonalRepoConfig::Github(existing)) => (
+                existing.auto_update_repo,
+                existing.auto_update_interval_minutes,
+                existing.sync_check_interval_minutes,
+            ),
+            Some(PersonalRepoConfig::Path(_)) | None => (
+                true,
+                DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES,
+                DEFAULT_PERSONAL_REPO_SYNC_CHECK_INTERVAL_MINUTES,
+            ),
+        };
 
     let mut updated = config.clone();
     updated.personal_repo = Some(PersonalRepoConfig::Github(GithubPersonalRepoConfig {
         github_repo: github_repo.clone(),
         auto_update_repo,
         auto_update_interval_minutes: auto_update_interval,
+        sync_check_interval_minutes: sync_check_interval,
     }));
     write_config(config_path, &updated)?;
 
@@ -548,7 +572,82 @@ fn configure_personal_repo(
         "Configured personal GitHub repository '{github_repo}' in {}.",
         config_path.display()
     );
+
+    let Some(personal_context) = resolve_personal_storage_context(&updated, false)? else {
+        return Ok(());
+    };
+    match bootstrap_personal_repo(&personal_context, &local_shelves_root(), bootstrap_mode)? {
+        PersonalRepoBootstrapOutcome::Skipped => {}
+        PersonalRepoBootstrapOutcome::Merged => {
+            println!("Merged local shelves with the personal repository.");
+        }
+        PersonalRepoBootstrapOutcome::Pushed => {
+            println!("Seeded the personal repository from local shelves.");
+        }
+        PersonalRepoBootstrapOutcome::Pulled => {
+            println!("Imported shelves from the personal repository into local shelves.");
+        }
+        PersonalRepoBootstrapOutcome::AlreadyInSync => {
+            println!("Local shelves already matched the personal repository.");
+        }
+    }
+
     Ok(())
+}
+
+fn parse_personal_repo_bootstrap_mode(value: &str) -> Result<PersonalRepoBootstrapMode> {
+    match value {
+        "auto" => Ok(PersonalRepoBootstrapMode::Auto),
+        "merge" => Ok(PersonalRepoBootstrapMode::Merge),
+        "push" => Ok(PersonalRepoBootstrapMode::Push),
+        "pull" => Ok(PersonalRepoBootstrapMode::Pull),
+        "skip" => Ok(PersonalRepoBootstrapMode::Skip),
+        _ => Err(
+            "personal repo bootstrap mode must be one of: auto, merge, push, pull, skip.".into(),
+        ),
+    }
+}
+
+fn emit_personal_repo_sync_warning(personal_context: Option<&PersonalStorageContext>) {
+    let Some(personal_context) = personal_context else {
+        return;
+    };
+
+    match personal_repo_sync_warning(personal_context) {
+        Ok(Some(PersonalRepoSyncWarning::Ahead {
+            local_commits,
+            push_command,
+            inspect_command,
+        })) => {
+            eprintln!(
+                "Warning: the managed personal repository checkout is ahead of origin by {local_commits} commit(s).\nPush: {push_command}\nInspect: {inspect_command}"
+            );
+        }
+        Ok(Some(PersonalRepoSyncWarning::Behind {
+            remote_commits,
+            pull_command,
+            inspect_command,
+        })) => {
+            eprintln!(
+                "Warning: the managed personal repository checkout is behind origin by {remote_commits} commit(s).\nPull: {pull_command}\nInspect: {inspect_command}"
+            );
+        }
+        Ok(Some(PersonalRepoSyncWarning::Diverged {
+            local_commits,
+            remote_commits,
+            pull_command,
+            push_command,
+            inspect_command,
+        })) => {
+            eprintln!(
+                "Warning: the managed personal repository checkout and origin have diverged ({local_commits} local-only commit(s), {remote_commits} remote-only commit(s)).\nPull: {pull_command}\nPush: {push_command}\nInspect: {inspect_command}"
+            );
+        }
+        Ok(None) => {}
+        Err(error) => {
+            eprintln!("Warning: failed to inspect personal repository sync status: {error}");
+        }
+    }
 }
 
 fn run_force_sync(shared_context: Option<&SharedStorageContext>) -> Result<()> {
@@ -572,7 +671,7 @@ fn run_personal_force_sync(personal_context: Option<&PersonalStorageContext>) ->
     let personal_context = personal_context.ok_or(personal_repository_required_message())?;
     if !force_sync_personal_storage(personal_context)? {
         return Err(
-            "Force sync requires a managed GitHub personal repository configured through personal_repo.mode = 'github'."
+            "Force sync requires a managed GitHub personal repository configured through personal_repo.github_repo."
                 .into(),
         );
     }
@@ -747,6 +846,7 @@ fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
     let shared_only = matches.get_flag("shared-only");
     let import_postman = matches.get_one::<String>("import-postman");
     let open_pr = matches.get_flag("open-pr");
+    let personal_repo_bootstrap = matches.get_one::<String>("personal-repo-bootstrap");
     let sync_personal = matches.get_flag("sync-personal");
     let web_mode = matches.get_flag("web");
     let has_keywords = matches
@@ -778,6 +878,7 @@ fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
             || force_sync_personal
             || sync_personal
             || add_personal_repo.is_some()
+            || personal_repo_bootstrap.is_some()
             || has_keywords)
     {
         return Err("--add-repo must be used on its own.".into());
@@ -810,6 +911,10 @@ fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
             || has_keywords)
     {
         return Err("--add-personal-repo must be used on its own.".into());
+    }
+
+    if personal_repo_bootstrap.is_some() && add_personal_repo.is_none() {
+        return Err("--personal-repo-bootstrap can only be used with --add-personal-repo.".into());
     }
 
     if matches.get_one::<u16>("web-port").is_some() && !web_mode {

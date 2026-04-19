@@ -100,6 +100,13 @@ pub(crate) fn build_cli() -> Command {
                 .help("Configure the personal GitHub repository from a GitHub URL or owner/repo"),
         )
         .arg(
+            Arg::new("personal-repo-bootstrap")
+                .long("personal-repo-bootstrap")
+                .value_name("MODE")
+                .value_parser(["auto", "merge", "push", "pull", "skip"])
+                .help("After --add-personal-repo, bootstrap shelves with auto, merge, push, pull, or skip (default: auto)"),
+        )
+        .arg(
             Arg::new("force-sync")
                 .long("force-sync")
                 .help("Force-sync the managed shared GitHub checkout")
