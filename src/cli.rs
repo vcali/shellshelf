@@ -94,9 +94,27 @@ pub(crate) fn build_cli() -> Command {
                 .help("Configure the shared GitHub repository from a GitHub URL or owner/repo"),
         )
         .arg(
+            Arg::new("add-personal-repo")
+                .long("add-personal-repo")
+                .value_name("GITHUB_REPO")
+                .help("Configure the personal GitHub repository from a GitHub URL or owner/repo"),
+        )
+        .arg(
             Arg::new("force-sync")
                 .long("force-sync")
                 .help("Force-sync the managed shared GitHub checkout")
+                .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("force-sync-personal")
+                .long("force-sync-personal")
+                .help("Force-sync the managed personal GitHub checkout")
+                .action(clap::ArgAction::SetTrue),
+        )
+        .arg(
+            Arg::new("sync-personal")
+                .long("sync-personal")
+                .help("Sync local shelves with the configured personal repository")
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(

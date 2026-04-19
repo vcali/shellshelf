@@ -8,6 +8,7 @@ mod curl_runner;
 mod database;
 mod github;
 mod keywords;
+mod personal_repo;
 mod postman_import;
 mod shared_repo_publish;
 mod web;

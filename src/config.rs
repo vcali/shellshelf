@@ -14,6 +14,8 @@ use std::time::Duration;
 
 const SHARED_REPOSITORY_REQUIRED_MESSAGE: &str =
     "No shared repository configured. Use --repo or configure shared_repo in config.";
+const PERSONAL_REPOSITORY_REQUIRED_MESSAGE: &str =
+    "No personal repository configured. Configure personal_repo in config.";
 const SHELVES_DIR_NAME: &str = "shelves";
 pub(crate) const BUILTIN_DEFAULT_SHELF: &str = "default";
 const LEGACY_SHARED_REPO_CONFIG_KEYS: &[&str] = &[
@@ -27,6 +29,7 @@ const LEGACY_SHARED_REPO_CONFIG_KEYS: &[&str] = &[
 #[derive(Debug, Default, Clone, PartialEq)]
 pub(crate) struct ShellshelfConfig {
     pub(crate) shared_repo: Option<SharedRepoConfig>,
+    pub(crate) personal_repo: Option<PersonalRepoConfig>,
     pub(crate) default_list_limit: Option<usize>,
     pub(crate) default_shelf: Option<String>,
     pub(crate) web: WebConfig,
@@ -66,6 +69,12 @@ pub(crate) enum SharedRepoConfig {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub(crate) enum PersonalRepoConfig {
+    Path(PathPersonalRepoConfig),
+    Github(GithubPersonalRepoConfig),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PathSharedRepoConfig {
     pub(crate) path: PathBuf,
     pub(crate) teams_dir: Option<PathBuf>,
@@ -83,11 +92,25 @@ pub(crate) struct GithubSharedRepoConfig {
     pub(crate) default_all_teams: bool,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PathPersonalRepoConfig {
+    pub(crate) path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct GithubPersonalRepoConfig {
+    pub(crate) github_repo: String,
+    pub(crate) auto_update_repo: bool,
+    pub(crate) auto_update_interval_minutes: u64,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawShellshelfConfig {
     #[serde(default)]
     shared_repo: Option<RawSharedRepoConfig>,
+    #[serde(default)]
+    personal_repo: Option<RawPersonalRepoConfig>,
     default_list_limit: Option<usize>,
     default_shelf: Option<String>,
     #[serde(default)]
@@ -114,10 +137,26 @@ struct RawSharedRepoConfig {
     default_all_teams: Option<bool>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawPersonalRepoConfig {
+    mode: String,
+    path: Option<PathBuf>,
+    github_repo: Option<String>,
+    auto_update_repo: Option<bool>,
+    auto_update_interval_minutes: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct SharedStorageContext {
     pub(crate) repository_root: PathBuf,
     pub(crate) teams_dir: PathBuf,
+    pub(crate) managed_github_repo: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PersonalStorageContext {
+    pub(crate) repository_root: PathBuf,
     pub(crate) managed_github_repo: Option<String>,
 }
 
@@ -195,12 +234,22 @@ impl GithubSharedRepoConfig {
     }
 }
 
+impl GithubPersonalRepoConfig {
+    fn auto_update_interval(&self) -> Duration {
+        Duration::from_secs(self.auto_update_interval_minutes.saturating_mul(60))
+    }
+}
+
 impl TryFrom<RawShellshelfConfig> for ShellshelfConfig {
     type Error = Box<dyn std::error::Error>;
 
     fn try_from(value: RawShellshelfConfig) -> Result<Self> {
         let shared_repo = match value.shared_repo {
             Some(shared_repo) => Some(SharedRepoConfig::try_from(shared_repo)?),
+            None => None,
+        };
+        let personal_repo = match value.personal_repo {
+            Some(personal_repo) => Some(PersonalRepoConfig::try_from(personal_repo)?),
             None => None,
         };
 
@@ -210,6 +259,7 @@ impl TryFrom<RawShellshelfConfig> for ShellshelfConfig {
 
         Ok(Self {
             shared_repo,
+            personal_repo,
             default_list_limit: value.default_list_limit,
             default_shelf: value.default_shelf,
             web: WebConfig::try_from(value.web.unwrap_or_default())?,
@@ -323,6 +373,77 @@ impl TryFrom<RawSharedRepoConfig> for SharedRepoConfig {
                 }))
             }
             _ => Err("shared_repo.mode must be either 'path' or 'github'.".into()),
+        }
+    }
+}
+
+impl TryFrom<RawPersonalRepoConfig> for PersonalRepoConfig {
+    type Error = Box<dyn std::error::Error>;
+
+    fn try_from(value: RawPersonalRepoConfig) -> Result<Self> {
+        match value.mode.as_str() {
+            "path" => {
+                let path = value
+                    .path
+                    .ok_or("personal_repo.mode 'path' requires personal_repo.path.")?;
+
+                if path.as_os_str().is_empty() {
+                    return Err("personal_repo.path cannot be empty.".into());
+                }
+
+                if value.github_repo.is_some() {
+                    return Err(
+                        "personal_repo.mode 'path' cannot be combined with personal_repo.github_repo."
+                            .into(),
+                    );
+                }
+
+                if value.auto_update_repo.is_some() {
+                    return Err(
+                        "personal_repo.auto_update_repo is only valid when personal_repo.mode is 'github'."
+                            .into(),
+                    );
+                }
+
+                if value.auto_update_interval_minutes.is_some() {
+                    return Err(
+                        "personal_repo.auto_update_interval_minutes is only valid when personal_repo.mode is 'github'."
+                            .into(),
+                    );
+                }
+
+                Ok(PersonalRepoConfig::Path(PathPersonalRepoConfig { path }))
+            }
+            "github" => {
+                let github_repo = value
+                    .github_repo
+                    .ok_or("personal_repo.mode 'github' requires personal_repo.github_repo.")?;
+                validate_github_repo_name(&github_repo)?;
+
+                if value.path.is_some() {
+                    return Err(
+                        "personal_repo.mode 'github' cannot be combined with personal_repo.path."
+                            .into(),
+                    );
+                }
+
+                let auto_update_interval_minutes = value
+                    .auto_update_interval_minutes
+                    .unwrap_or(DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES);
+
+                if auto_update_interval_minutes == 0 {
+                    return Err(
+                        "personal_repo.auto_update_interval_minutes must be greater than 0.".into(),
+                    );
+                }
+
+                Ok(PersonalRepoConfig::Github(GithubPersonalRepoConfig {
+                    github_repo,
+                    auto_update_repo: value.auto_update_repo.unwrap_or(true),
+                    auto_update_interval_minutes,
+                }))
+            }
+            _ => Err("personal_repo.mode must be either 'path' or 'github'.".into()),
         }
     }
 }
@@ -502,6 +623,13 @@ pub(crate) fn write_config(path: &Path, config: &ShellshelfConfig) -> Result<()>
         );
     }
 
+    if let Some(personal_repo) = config.personal_repo.as_ref() {
+        object.insert(
+            "personal_repo".to_string(),
+            serde_json::Value::Object(personal_repo_to_json_map(personal_repo)),
+        );
+    }
+
     if let Some(default_list_limit) = config.default_list_limit {
         object.insert(
             "default_list_limit".to_string(),
@@ -550,6 +678,40 @@ fn shared_repo_to_json_map(shared_repo: &SharedRepoConfig) -> serde_json::Map<St
             insert_optional_path(&mut object, "teams_dir", config.teams_dir.as_ref());
             insert_optional_string(&mut object, "default_team", config.default_team.as_ref());
             insert_optional_bool(&mut object, "default_all_teams", config.default_all_teams);
+            if !config.auto_update_repo {
+                object.insert("auto_update_repo".to_string(), Value::Bool(false));
+            }
+            if config.auto_update_interval_minutes
+                != DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES
+            {
+                object.insert(
+                    "auto_update_interval_minutes".to_string(),
+                    Value::Number(config.auto_update_interval_minutes.into()),
+                );
+            }
+        }
+    }
+
+    object
+}
+
+fn personal_repo_to_json_map(personal_repo: &PersonalRepoConfig) -> serde_json::Map<String, Value> {
+    let mut object = serde_json::Map::new();
+
+    match personal_repo {
+        PersonalRepoConfig::Path(config) => {
+            object.insert("mode".to_string(), Value::String("path".to_string()));
+            object.insert(
+                "path".to_string(),
+                Value::String(config.path.display().to_string()),
+            );
+        }
+        PersonalRepoConfig::Github(config) => {
+            object.insert("mode".to_string(), Value::String("github".to_string()));
+            object.insert(
+                "github_repo".to_string(),
+                Value::String(config.github_repo.clone()),
+            );
             if !config.auto_update_repo {
                 object.insert("auto_update_repo".to_string(), Value::Bool(false));
             }
@@ -668,6 +830,45 @@ pub(crate) fn resolve_shared_storage_context_with_options(
     }))
 }
 
+pub(crate) fn resolve_personal_storage_context(
+    config: &ShellshelfConfig,
+    skip_config_auto_update: bool,
+) -> Result<Option<PersonalStorageContext>> {
+    let Some(personal_repo) = config.personal_repo.as_ref() else {
+        return Ok(None);
+    };
+
+    let (repository_root, managed_github_repo) = match personal_repo {
+        PersonalRepoConfig::Path(path_config) => (path_config.path.clone(), None),
+        PersonalRepoConfig::Github(github_config) => {
+            let (checkout_path, was_cloned) =
+                ensure_github_repo_checkout(&github_config.github_repo)?;
+            if was_cloned {
+                let _ = write_github_repo_sync_stamp(
+                    &get_default_github_state_root(),
+                    &github_config.github_repo,
+                );
+            } else if !skip_config_auto_update {
+                if let Err(error) = maybe_update_github_repo_checkout(
+                    &github_config.github_repo,
+                    &checkout_path,
+                    github_config.auto_update_repo,
+                    github_config.auto_update_interval(),
+                ) {
+                    eprintln!("Warning: failed to update personal repository checkout: {error}");
+                }
+            }
+
+            (checkout_path, Some(github_config.github_repo.clone()))
+        }
+    };
+
+    Ok(Some(PersonalStorageContext {
+        repository_root,
+        managed_github_repo,
+    }))
+}
+
 fn resolve_repository_root_from_config(
     config: &ShellshelfConfig,
     skip_auto_update: bool,
@@ -704,6 +905,17 @@ pub(crate) fn force_sync_shared_storage(shared_context: &SharedStorageContext) -
     };
 
     force_update_github_repo_checkout(github_repo, &shared_context.repository_root)?;
+    Ok(true)
+}
+
+pub(crate) fn force_sync_personal_storage(
+    personal_context: &PersonalStorageContext,
+) -> Result<bool> {
+    let Some(github_repo) = personal_context.managed_github_repo.as_deref() else {
+        return Ok(false);
+    };
+
+    force_update_github_repo_checkout(github_repo, &personal_context.repository_root)?;
     Ok(true)
 }
 
@@ -854,14 +1066,19 @@ pub(crate) fn shared_repository_required_message() -> &'static str {
     SHARED_REPOSITORY_REQUIRED_MESSAGE
 }
 
+pub(crate) fn personal_repository_required_message() -> &'static str {
+    PERSONAL_REPOSITORY_REQUIRED_MESSAGE
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         get_local_data_file_path, get_team_data_file_path, list_all_team_shelves,
         list_local_shelves, list_team_shelves, resolve_active_shelf, resolve_config_path,
         validate_relative_directory, validate_shelf_name, write_config, DefaultSharedReadTarget,
-        GithubSharedRepoConfig, PathSharedRepoConfig, SharedRepoConfig, SharedStorageContext,
-        ShellshelfConfig, WebConfig, WebTheme, BUILTIN_DEFAULT_SHELF,
+        GithubPersonalRepoConfig, GithubSharedRepoConfig, PathSharedRepoConfig, PersonalRepoConfig,
+        SharedRepoConfig, SharedStorageContext, ShellshelfConfig, WebConfig, WebTheme,
+        BUILTIN_DEFAULT_SHELF,
     };
     use crate::cli::build_cli;
     use crate::github::DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES;
@@ -1073,6 +1290,7 @@ mod tests {
                     default_team: None,
                     default_all_teams: false,
                 })),
+                personal_repo: None,
                 default_list_limit: None,
                 default_shelf: Some("curl".to_string()),
                 web: WebConfig::default(),
@@ -1105,6 +1323,38 @@ mod tests {
                     auto_update_interval_minutes: DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES,
                     default_team: None,
                     default_all_teams: false,
+                })),
+                personal_repo: None,
+                default_list_limit: None,
+                default_shelf: None,
+                web: WebConfig::default(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_load_config_with_github_personal_repo_and_defaults() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = write_config_file(
+            &temp_dir,
+            serde_json::json!({
+                "personal_repo": {
+                    "mode": "github",
+                    "github_repo": "acme/private-shellshelf"
+                }
+            }),
+        );
+
+        let config = ShellshelfConfig::load_from_file(&config_path).unwrap();
+
+        assert_eq!(
+            config,
+            ShellshelfConfig {
+                shared_repo: None,
+                personal_repo: Some(PersonalRepoConfig::Github(GithubPersonalRepoConfig {
+                    github_repo: "acme/private-shellshelf".to_string(),
+                    auto_update_repo: true,
+                    auto_update_interval_minutes: DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES,
                 })),
                 default_list_limit: None,
                 default_shelf: None,
@@ -1297,6 +1547,11 @@ mod tests {
                 default_team: Some("platform".to_string()),
                 default_all_teams: false,
             })),
+            personal_repo: Some(PersonalRepoConfig::Github(GithubPersonalRepoConfig {
+                github_repo: "acme/private-shellshelf".to_string(),
+                auto_update_repo: false,
+                auto_update_interval_minutes: 30,
+            })),
             default_list_limit: Some(50),
             default_shelf: Some("curl".to_string()),
             web: WebConfig {
@@ -1316,6 +1571,12 @@ mod tests {
                     "github_repo": "acme/shared-shellshelf",
                     "teams_dir": "company-teams",
                     "default_team": "platform",
+                    "auto_update_repo": false,
+                    "auto_update_interval_minutes": 30
+                },
+                "personal_repo": {
+                    "mode": "github",
+                    "github_repo": "acme/private-shellshelf",
                     "auto_update_repo": false,
                     "auto_update_interval_minutes": 30
                 },

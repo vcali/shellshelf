@@ -1,6 +1,6 @@
 # shellshelf Reference
 
-This document covers configuration, CLI parameters, storage modes, and the current GitHub-backed shared repository workflow.
+This document covers configuration, CLI parameters, storage modes, and the current GitHub-backed shared-repository and personal-sync workflows.
 
 ## Installation
 
@@ -40,6 +40,26 @@ Local storage is shelf-based:
 ```
 
 Use local mode when you do not pass `--team` or `--all-teams`.
+
+### Personal repository mode
+
+Personal mode syncs local shelves through a separate repository without changing read behavior:
+
+```text
+private-shellshelf/
+  shelves/
+    curl.json
+    git.json
+```
+
+Personal mode is activated when `personal_repo` is configured.
+
+Current behavior:
+
+- default reads still use local shelves; the personal repo is not part of search or list scope
+- local CLI writes and local web saves sync the changed shelf into the personal repo
+- GitHub-backed personal repos commit and push directly to the base branch
+- `--sync-personal` seeds or refreshes the personal repo from all existing local shelves
 
 ### Shared repository mode
 
@@ -124,10 +144,24 @@ shellshelf --config /path/to/config.json ...
 }
 ```
 
+### Personal repo mode
+
+```json
+{
+  "personal_repo": {
+    "mode": "github",
+    "github_repo": "acme/private-shellshelf",
+    "auto_update_repo": true,
+    "auto_update_interval_minutes": 15
+  }
+}
+```
+
 Supported top-level keys:
 
 - `default_shelf`: optional default shelf for writes and shelf-scoped list/search operations. If omitted, `shellshelf` falls back to the built-in `default` shelf when an active shelf is required
 - `shared_repo`: shared repository configuration
+- `personal_repo`: private personal repository configuration for local shelves
 - `web`: optional web-interface configuration
 - `default_list_limit`: optional default limit for `--list`. `0` means unlimited. If omitted, `shellshelf` defaults to `20`
 
@@ -147,10 +181,20 @@ Supported keys inside `shared_repo`:
 - `auto_update_repo`: GitHub mode only. Defaults to `true`
 - `auto_update_interval_minutes`: GitHub mode only. Defaults to `15` and must be greater than `0`
 
+Supported keys inside `personal_repo`:
+
+- `mode`: must be `path` or `github`
+- `path`: required for `mode = "path"`
+- `github_repo`: required for `mode = "github"`, in `<owner>/<repo>` format
+- `auto_update_repo`: GitHub mode only. Defaults to `true`
+- `auto_update_interval_minutes`: GitHub mode only. Defaults to `15` and must be greater than `0`
+
 Validation rules:
 
 - `mode = "path"` requires `path` and rejects `github_repo`, `auto_update_repo`, and `auto_update_interval_minutes`
 - `mode = "github"` requires `github_repo` and rejects `path`
+- `personal_repo.mode = "path"` requires `personal_repo.path` and rejects `personal_repo.github_repo`, `personal_repo.auto_update_repo`, and `personal_repo.auto_update_interval_minutes`
+- `personal_repo.mode = "github"` requires `personal_repo.github_repo` and rejects `personal_repo.path`
 - `default_team` and `default_all_teams = true` cannot be configured together
 - `default_shelf` must use the normal shelf naming rules
 - flat legacy config keys such as `github_repo`, `shared_repo_path`, `teams_dir`, and `auto_update_repo` at the top level are rejected
@@ -192,13 +236,25 @@ Precedence:
 - `--shared-only`: limit default list/search commands to shared storage
 - `--limit <COUNT>`: limit how many commands are shown with `--list`. `0` means unlimited
 
+### Personal sync options
+
+- `--add-personal-repo <GITHUB_REPO>`: configure the personal GitHub repository in config from a GitHub URL or `owner/repo`
+- `--force-sync-personal`: force-sync the managed personal GitHub checkout configured through `personal_repo.mode = "github"`
+- `--sync-personal`: sync every local shelf into the configured personal repository
+
 ### Configuration option
 
 - `--config <PATH>`: use a non-default `shellshelf` config file
 
 `--add-repo` is a setup command and must be used on its own.
 
+`--add-personal-repo` is a setup command and must be used on its own.
+
 `--force-sync` is also standalone. It refreshes the managed GitHub checkout immediately, ignoring the normal auto-update interval. It does not operate on explicit `--repo <PATH>` checkouts or path-mode shared repositories.
+
+`--force-sync-personal` is also standalone. It refreshes the managed personal checkout immediately, ignoring the normal auto-update interval. It only works for `personal_repo.mode = "github"`.
+
+`--sync-personal` is standalone. It copies every local shelf file into the configured personal repository, then commits and pushes any resulting changes.
 
 ## Web Interface
 
@@ -216,6 +272,7 @@ Current behavior:
 - loads selected commands into an editable workbench with editable description and command fields
 - can create shelves in the visible local or team-scoped shared area
 - can save new commands or update the selected command in the current shelf
+- local shelf creates and saves also sync into `personal_repo` when configured
 - displays parsed request method, URL, and request headers next to response headers after a curl run
 - previews text responses inline
 - previews image and video responses inline when the response content type is previewable
@@ -253,6 +310,8 @@ When search keywords are provided without `--shelf`, `shellshelf` searches acros
 - `--shared-only`: every shelf in the default shared scope, which is all teams unless `shared_repo.default_team` narrows it
 
 `--create-shelf <NAME>` creates the requested shelf file explicitly and exits. If the shelf already exists, `shellshelf` reports that and does not overwrite it.
+
+If `personal_repo` is configured, local `--add`, local `--create-shelf`, local `--import-postman`, and local web saves sync the changed shelf file into the personal repo and push it directly.
 
 When `--open-pr` is added to a shared `--create-shelf`, `shellshelf` prepares a clean publish branch before writing, then commits the new shelf file, pushes it, and opens a pull request after the write succeeds.
 
@@ -309,7 +368,7 @@ The teams directory must be a relative path and cannot contain `.` or `..` compo
 
 ## GitHub Integration
 
-Current GitHub integration is checkout-based for reads and PR-based for optional shared writes. `shellshelf` still relies on local `git` and `gh` authentication rather than managing credentials on its own.
+Current GitHub integration is checkout-based for reads, PR-based for optional shared writes, and direct-push based for local personal sync. `shellshelf` still relies on local `git` and `gh` authentication rather than managing credentials on its own.
 
 Requirements:
 
@@ -321,6 +380,7 @@ Requirements:
 Behavior:
 
 - if `shared_repo.mode` is `github`, `shellshelf` clones into `~/.shellshelf/repos/<owner>__<repo>`
+- if `personal_repo.mode` is `github`, `shellshelf` clones into the same managed checkout root under `~/.shellshelf/repos/<owner>__<repo>`
 - managed checkouts are refreshed with `git pull --ff-only`
 - refresh runs at most once per `auto_update_interval_minutes`
 - set `auto_update_repo` to `false` to disable refresh entirely
@@ -330,6 +390,8 @@ Behavior:
 - if `--pr-branch` is omitted, `shellshelf` reuses the current non-base branch when possible; otherwise it creates a branch named like `shellshelf/<team>-<shelf>`
 - after the write, `shellshelf` stages the changed shelf JSON, commits it, pushes it with `git push --set-upstream origin <branch>`, and opens a pull request with `gh pr create`
 - if the write is a no-op, `shellshelf` skips commit, push, and PR creation
+- local personal sync writes target `shelves/<shelf>.json` in the personal repo, commit on the base branch, and push directly with `git push origin <base-branch>`
+- `--sync-personal` applies the same direct-push flow across every local shelf file
 
 ## Search Behavior
 

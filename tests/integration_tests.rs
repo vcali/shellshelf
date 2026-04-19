@@ -68,6 +68,40 @@ fn write_path_config(
     .unwrap();
 }
 
+fn write_personal_path_config(
+    config_path: &Path,
+    personal_repo: &Path,
+    default_shelf: Option<&str>,
+) {
+    let mut personal_repo_value = serde_json::Map::new();
+    personal_repo_value.insert(
+        "mode".to_string(),
+        serde_json::Value::String("path".to_string()),
+    );
+    personal_repo_value.insert(
+        "path".to_string(),
+        serde_json::Value::String(personal_repo.display().to_string()),
+    );
+
+    let mut config = serde_json::Map::new();
+    config.insert(
+        "personal_repo".to_string(),
+        serde_json::Value::Object(personal_repo_value),
+    );
+    if let Some(default_shelf) = default_shelf {
+        config.insert(
+            "default_shelf".to_string(),
+            serde_json::Value::String(default_shelf.to_string()),
+        );
+    }
+
+    fs::write(
+        config_path,
+        serde_json::to_string_pretty(&serde_json::Value::Object(config)).unwrap(),
+    )
+    .unwrap();
+}
+
 #[derive(Default)]
 struct GithubConfigOptions<'a> {
     default_shelf: Option<&'a str>,
@@ -569,7 +603,10 @@ fn test_help_output() {
         .stdout(predicate::str::contains("--import-postman"))
         .stdout(predicate::str::contains("--web"))
         .stdout(predicate::str::contains("--web-port"))
-        .stdout(predicate::str::contains("--force-sync"));
+        .stdout(predicate::str::contains("--force-sync"))
+        .stdout(predicate::str::contains("--add-personal-repo"))
+        .stdout(predicate::str::contains("--force-sync-personal"))
+        .stdout(predicate::str::contains("--sync-personal"));
 }
 
 #[test]
@@ -631,6 +668,19 @@ fn test_force_sync_requires_standalone_usage() {
 }
 
 #[test]
+fn test_sync_personal_requires_standalone_usage() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+
+    cmd.env("HOME", temp_dir.path())
+        .args(["--sync-personal", "--list"]);
+
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "--sync-personal must be used on its own.",
+    ));
+}
+
+#[test]
 fn test_add_command_local() {
     let temp_dir = TempDir::new().unwrap();
     let mut cmd = Command::cargo_bin("shellshelf").unwrap();
@@ -654,6 +704,37 @@ fn test_add_command_local() {
 }
 
 #[test]
+fn test_add_local_command_updates_personal_repo() {
+    let temp_dir = TempDir::new().unwrap();
+    let home_dir = temp_dir.path();
+    let config_path = home_dir.join(".shellshelf").join("config.json");
+    let personal_repo = home_dir.join("private-shellshelf");
+
+    fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    init_managed_checkout_repo(home_dir, &personal_repo);
+    write_personal_path_config(&config_path, &personal_repo, Some("curl"));
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", home_dir)
+        .env("GIT_AUTHOR_NAME", "Shellshelf Tests")
+        .env("GIT_AUTHOR_EMAIL", "shellshelf-tests@example.com")
+        .env("GIT_COMMITTER_NAME", "Shellshelf Tests")
+        .env("GIT_COMMITTER_EMAIL", "shellshelf-tests@example.com")
+        .args(["-s", "curl", "--add", "curl https://example.com/personal"]);
+
+    cmd.assert().success().stdout(predicate::str::contains(
+        "Updated personal sync for local shelf 'curl'.",
+    ));
+
+    assert!(personal_repo.join("shelves").join("curl.json").exists());
+    assert!(read_git_output(
+        &home_dir.join("origin.git"),
+        &["show", "HEAD:shelves/curl.json"],
+    )
+    .contains("curl https://example.com/personal"));
+}
+
+#[test]
 fn test_create_local_shelf() {
     let temp_dir = TempDir::new().unwrap();
     let mut cmd = Command::cargo_bin("shellshelf").unwrap();
@@ -671,6 +752,43 @@ fn test_create_local_shelf() {
         .join("shelves")
         .join("git.json")
         .exists());
+}
+
+#[test]
+fn test_sync_personal_pushes_existing_local_shelves() {
+    let temp_dir = TempDir::new().unwrap();
+    let home_dir = temp_dir.path();
+    let config_path = home_dir.join(".shellshelf").join("config.json");
+    let personal_repo = home_dir.join("private-shellshelf");
+
+    fs::create_dir_all(home_dir.join(".shellshelf").join("shelves")).unwrap();
+    write_personal_path_config(&config_path, &personal_repo, None);
+    init_managed_checkout_repo(home_dir, &personal_repo);
+    write_command_database(
+        &home_dir
+            .join(".shellshelf")
+            .join("shelves")
+            .join("curl.json"),
+        &[("curl https://example.com/synced", Some("Synced command"))],
+    );
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", home_dir)
+        .env("GIT_AUTHOR_NAME", "Shellshelf Tests")
+        .env("GIT_AUTHOR_EMAIL", "shellshelf-tests@example.com")
+        .env("GIT_COMMITTER_NAME", "Shellshelf Tests")
+        .env("GIT_COMMITTER_EMAIL", "shellshelf-tests@example.com")
+        .arg("--sync-personal");
+
+    cmd.assert().success().stdout(predicate::str::contains(
+        "Synchronized local shelves to the configured personal repository.",
+    ));
+
+    assert!(read_git_output(
+        &home_dir.join("origin.git"),
+        &["show", "HEAD:shelves/curl.json"],
+    )
+    .contains("curl https://example.com/synced"));
 }
 
 #[test]
@@ -1777,6 +1895,73 @@ fn test_add_repo_rejects_combined_flags() {
 
     cmd.assert().failure().stderr(predicate::str::contains(
         "--add-repo must be used on its own.",
+    ));
+}
+
+#[test]
+fn test_add_personal_repo_writes_github_personal_repo_config_from_url() {
+    let temp_dir = TempDir::new().unwrap();
+    let home_dir = temp_dir.path();
+    let shellshelf_dir = home_dir.join(".shellshelf");
+    let config_path = shellshelf_dir.join("config.json");
+
+    fs::create_dir_all(&shellshelf_dir).unwrap();
+    write_text_file(
+        &config_path,
+        r#"{
+  "default_shelf": "curl",
+  "web": {
+    "port": 4920,
+    "theme": "giphy"
+  },
+  "personal_repo": {
+    "mode": "path",
+    "path": "/tmp/old-private-shellshelf"
+  }
+}"#,
+    );
+
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+    cmd.env("HOME", home_dir).args([
+        "--add-personal-repo",
+        "https://github.com/acme/private-shellshelf.git",
+    ]);
+
+    cmd.assert().success().stdout(predicate::str::contains(
+        "Configured personal GitHub repository 'acme/private-shellshelf'",
+    ));
+
+    let value: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    assert_eq!(
+        value,
+        serde_json::json!({
+            "personal_repo": {
+                "mode": "github",
+                "github_repo": "acme/private-shellshelf"
+            },
+            "default_shelf": "curl",
+            "web": {
+                "port": 4920,
+                "theme": "giphy"
+            }
+        })
+    );
+}
+
+#[test]
+fn test_add_personal_repo_rejects_combined_flags() {
+    let temp_dir = TempDir::new().unwrap();
+    let mut cmd = Command::cargo_bin("shellshelf").unwrap();
+
+    cmd.env("HOME", temp_dir.path()).args([
+        "--add-personal-repo",
+        "acme/private-shellshelf",
+        "--list",
+    ]);
+
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "--add-personal-repo must be used on its own.",
     ));
 }
 
