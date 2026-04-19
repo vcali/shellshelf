@@ -2135,6 +2135,10 @@ fn test_add_personal_repo_auto_merges_conflicting_shelves() {
     cmd.env("HOME", home_dir)
         .env("SHELLSHELF_GH_BIN", &gh_path)
         .env("SHELLSHELF_TEST_GH_CLONE_SOURCE", &origin_path)
+        .env("GIT_AUTHOR_NAME", "Shellshelf Tests")
+        .env("GIT_AUTHOR_EMAIL", "shellshelf-tests@example.com")
+        .env("GIT_COMMITTER_NAME", "Shellshelf Tests")
+        .env("GIT_COMMITTER_EMAIL", "shellshelf-tests@example.com")
         .args(["--add-personal-repo", "acme/private-shellshelf"]);
 
     cmd.assert().success().stdout(predicate::str::contains(

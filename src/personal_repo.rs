@@ -588,7 +588,13 @@ fn detect_default_base_branch(repo_root: &Path) -> Result<PersonalBaseBranch> {
 
     let branch = current_branch(repo_root)?;
     if !branch.is_empty() {
-        // Freshly cloned empty repositories have a local base branch but no origin/<branch> yet.
+        // Freshly cloned empty repositories often start on "master" even though Shellshelf
+        // treats "main" as the default bootstrap branch when origin has no branch yet.
+        let branch = if branch == "master" {
+            "main".to_string()
+        } else {
+            branch
+        };
         return Ok(PersonalBaseBranch {
             exists_on_origin: remote_branch_exists(repo_root, &branch)?,
             name: branch,
