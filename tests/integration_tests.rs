@@ -785,9 +785,6 @@ fn test_add_local_command_initializes_empty_managed_personal_repo() {
 }"#,
     );
 
-    let base_branch = read_git_output(&personal_repo, &["branch", "--show-current"]);
-    assert!(!base_branch.is_empty());
-
     let mut cmd = Command::cargo_bin("shellshelf").unwrap();
     cmd.env("HOME", home_dir)
         .env("GIT_AUTHOR_NAME", "Shellshelf Tests")
@@ -805,7 +802,7 @@ fn test_add_local_command_initializes_empty_managed_personal_repo() {
 
     assert!(read_git_output(
         &home_dir.join("origin.git"),
-        &["show", &format!("{base_branch}:shelves/curl.json")],
+        &["show", "main:shelves/curl.json"],
     )
     .contains("curl https://example.com/personal"));
 }
