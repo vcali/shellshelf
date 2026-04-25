@@ -32,7 +32,7 @@ At a high level, execution is:
 5. For GitHub-backed shared or personal mode, ensure a local checkout exists and refresh it if due.
 6. Execute one of the user operations:
    - add shared GitHub repo config
-   - add personal GitHub repo config
+   - add personal GitHub repo config and optionally bootstrap local/personal shelves
    - force sync the managed shared checkout
    - force sync the managed personal checkout
    - sync all local shelves into the personal repo
@@ -110,12 +110,15 @@ Current GitHub support is intentionally conservative:
 
 - repository selection comes from CLI or `shared_repo` config
 - `--add-repo` can write `shared_repo.mode = "github"` config from a GitHub URL or `owner/repo`
-- `--add-personal-repo` can write `personal_repo.mode = "github"` config from a GitHub URL or `owner/repo`
+- `--add-personal-repo` can write `personal_repo.github_repo` config from a GitHub URL or `owner/repo`
+- `--personal-repo-bootstrap` keeps add-time personal sync non-interactive for users and agents
+- add-time personal merge treats command strings as identity, removes duplicates, and upgrades descriptions when one side is clearly richer
 - bootstrap uses `gh repo clone`
 - refresh uses `git pull --ff-only`
 - force sync reuses the same checkout refresh path but skips the interval gate
 - refresh state is tracked in `~/.shellshelf/state`
 - refresh cadence is configurable with `shared_repo.auto_update_interval_minutes` and `personal_repo.auto_update_interval_minutes`
+- managed personal sync-status rechecks are separately configurable with `personal_repo.sync_check_interval_minutes` and default to 30 minutes
 - shared `--add`, `--create-shelf`, and `--import-postman` can optionally publish via `--open-pr`
 - publish prep checks for a clean checkout, fetches the selected base branch, switches to the requested or generated publish branch, and rebases on the base branch
 - publish completion stages the changed shelf file, commits it, pushes it, and opens a PR with `gh`

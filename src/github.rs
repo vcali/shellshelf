@@ -73,6 +73,14 @@ fn github_repo_slug(github_repo: &str) -> Result<String> {
     Ok(format!("{owner}__{repo}"))
 }
 
+pub(crate) fn get_github_repo_state_stamp_path(
+    state_root: &Path,
+    github_repo: &str,
+    suffix: &str,
+) -> Result<PathBuf> {
+    Ok(state_root.join(format!("{}.{}", github_repo_slug(github_repo)?, suffix)))
+}
+
 pub(crate) fn get_github_repo_checkout_path(
     repository_root: &Path,
     github_repo: &str,
@@ -84,7 +92,7 @@ pub(crate) fn get_github_repo_sync_stamp_path(
     state_root: &Path,
     github_repo: &str,
 ) -> Result<PathBuf> {
-    Ok(state_root.join(format!("{}.sync", github_repo_slug(github_repo)?)))
+    get_github_repo_state_stamp_path(state_root, github_repo, "sync")
 }
 
 fn clone_github_repo(github_repo: &str, checkout_path: &Path) -> Result<()> {
@@ -121,25 +129,36 @@ fn pull_github_repo(checkout_path: &Path) -> Result<()> {
     .map(|_| ())
 }
 
-fn should_auto_update_repo(sync_stamp_path: &Path, auto_update_interval: Duration) -> bool {
-    let modified_time = fs::metadata(sync_stamp_path)
+pub(crate) fn should_refresh_github_repo_state(
+    stamp_path: &Path,
+    refresh_interval: Duration,
+) -> bool {
+    let modified_time = fs::metadata(stamp_path)
         .and_then(|metadata| metadata.modified())
         .ok();
 
     match modified_time {
         Some(modified_time) => match SystemTime::now().duration_since(modified_time) {
-            Ok(elapsed) => elapsed >= auto_update_interval,
+            Ok(elapsed) => elapsed >= refresh_interval,
             Err(_) => true,
         },
         None => true,
     }
 }
 
-pub(crate) fn write_github_repo_sync_stamp(state_root: &Path, github_repo: &str) -> Result<()> {
-    let sync_stamp_path = get_github_repo_sync_stamp_path(state_root, github_repo)?;
+pub(crate) fn write_github_repo_state_stamp(
+    state_root: &Path,
+    github_repo: &str,
+    suffix: &str,
+) -> Result<()> {
+    let stamp_path = get_github_repo_state_stamp_path(state_root, github_repo, suffix)?;
     fs::create_dir_all(state_root)?;
-    fs::write(sync_stamp_path, b"updated")?;
+    fs::write(stamp_path, b"updated")?;
     Ok(())
+}
+
+pub(crate) fn write_github_repo_sync_stamp(state_root: &Path, github_repo: &str) -> Result<()> {
+    write_github_repo_state_stamp(state_root, github_repo, "sync")
 }
 
 pub(crate) fn maybe_update_github_repo_checkout_with_runner<F>(
@@ -158,7 +177,7 @@ where
     }
 
     let sync_stamp_path = get_github_repo_sync_stamp_path(state_root, github_repo)?;
-    if !should_auto_update_repo(&sync_stamp_path, auto_update_interval) {
+    if !should_refresh_github_repo_state(&sync_stamp_path, auto_update_interval) {
         return Ok(false);
     }
 
