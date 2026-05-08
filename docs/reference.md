@@ -59,6 +59,7 @@ Current behavior:
 - default reads still use local shelves; the personal repo is not part of search or list scope
 - local CLI writes and local web saves sync the changed shelf into the personal repo
 - GitHub-backed personal repos commit and push directly to the base branch
+- managed GitHub personal checkouts refresh in the background when their auto-update interval is due, so normal commands keep using the current local checkout instead of waiting on `git pull`
 - `--add-personal-repo` bootstraps non-interactively by default: push when the repo is empty, pull when local shelves are empty, and otherwise merge matching shelf files command-by-command while deduplicating exact command strings
 - `--sync-personal` seeds or refreshes the personal repo from all existing local shelves
 - when the managed personal checkout is out of sync with `origin`, `shellshelf` prints ready-to-run `git` commands for push or pull plus an `Inspect:` command, and only re-fetches remote status on the configured interval
@@ -101,6 +102,8 @@ shellshelf --add-repo acme/shared-shellshelf
 This updates `~/.shellshelf/config.json` (or `--config <PATH>`) to use `shared_repo.mode = "github"` for that repository while preserving unrelated config such as `default_shelf`, `web`, and existing shared-team defaults.
 
 Once a shared repo is configured, default read commands include local shelves plus all teams unless `shared_repo.default_team` narrows that default or you explicitly scope the read with CLI flags.
+
+Managed GitHub shared checkouts also refresh in the background when their auto-update interval is due, so normal reads use the current checkout immediately while the next snapshot is pulled in separately.
 
 ## Configuration
 
@@ -255,9 +258,9 @@ Precedence:
 
 `--add-personal-repo` is a setup command and must be used on its own, except for the optional `--personal-repo-bootstrap <MODE>` companion flag.
 
-`--force-sync` is also standalone. It refreshes the managed GitHub checkout immediately, ignoring the normal auto-update interval. It does not operate on explicit `--repo <PATH>` checkouts or path-mode shared repositories.
+`--force-sync` is also standalone. It refreshes the managed GitHub checkout immediately and waits for completion, ignoring the normal auto-update interval. It does not operate on explicit `--repo <PATH>` checkouts or path-mode shared repositories.
 
-`--force-sync-personal` is also standalone. It refreshes the managed personal checkout immediately, ignoring the normal auto-update interval. It only works when `personal_repo.github_repo` is configured.
+`--force-sync-personal` is also standalone. It refreshes the managed personal checkout immediately and waits for completion, ignoring the normal auto-update interval. It only works when `personal_repo.github_repo` is configured.
 
 `--sync-personal` is standalone. It copies every local shelf file into the configured personal repository, then commits and pushes any resulting changes.
 
@@ -387,7 +390,7 @@ Behavior:
 - if `shared_repo.mode` is `github`, `shellshelf` clones into `~/.shellshelf/repos/<owner>__<repo>`
 - if `personal_repo.github_repo` is configured, `shellshelf` clones into the same managed checkout root under `~/.shellshelf/repos/<owner>__<repo>`
 - managed checkouts are refreshed with `git pull --ff-only`
-- refresh runs at most once per `auto_update_interval_minutes`
+- managed GitHub checkout refreshes are scheduled at most once per `auto_update_interval_minutes` and run in a detached background process during normal commands
 - managed personal-repo sync-status checks re-fetch `origin/<base-branch>` at most once per `sync_check_interval_minutes`; between checks, warnings use the last fetched `origin/<base-branch>` state
 - set `auto_update_repo` to `false` to disable refresh entirely
 - `--open-pr` is available on shared `--add`, `--create-shelf`, and `--import-postman`

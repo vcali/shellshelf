@@ -177,4 +177,16 @@ pub(crate) fn build_cli() -> Command {
                 .help("Keywords to search for in the active shelf or across all shelves")
                 .num_args(0..),
         )
+        .arg(
+            Arg::new("background-sync-repo")
+                .long("__background-sync-repo")
+                .value_name("GITHUB_REPO")
+                .hide(true),
+        )
+        .arg(
+            Arg::new("background-sync-checkout")
+                .long("__background-sync-checkout")
+                .value_name("PATH")
+                .hide(true),
+        )
 }

@@ -2,11 +2,14 @@ use crate::Result;
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs;
+use std::fs::OpenOptions;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command as ProcessCommand, ExitStatus, Output};
+use std::process::{Command as ProcessCommand, ExitStatus, Output, Stdio};
 use std::time::{Duration, SystemTime};
 
 pub(crate) const DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES: u64 = 15;
+const BACKGROUND_SYNC_LOCK_STALE_AFTER: Duration = Duration::from_secs(30 * 60);
 
 pub(crate) fn normalize_github_repo_input(input: &str) -> Result<String> {
     let trimmed = input.trim();
@@ -95,6 +98,10 @@ pub(crate) fn get_github_repo_sync_stamp_path(
     get_github_repo_state_stamp_path(state_root, github_repo, "sync")
 }
 
+fn get_github_repo_sync_lock_path(state_root: &Path, github_repo: &str) -> Result<PathBuf> {
+    get_github_repo_state_stamp_path(state_root, github_repo, "sync.lock")
+}
+
 fn clone_github_repo(github_repo: &str, checkout_path: &Path) -> Result<()> {
     let gh_binary = env::var("SHELLSHELF_GH_BIN").unwrap_or_else(|_| "gh".to_string());
     let output = ProcessCommand::new(&gh_binary)
@@ -161,16 +168,16 @@ pub(crate) fn write_github_repo_sync_stamp(state_root: &Path, github_repo: &str)
     write_github_repo_state_stamp(state_root, github_repo, "sync")
 }
 
-pub(crate) fn maybe_update_github_repo_checkout_with_runner<F>(
+pub(crate) fn maybe_schedule_github_repo_checkout_update_with_runner<F>(
     github_repo: &str,
     checkout_path: &Path,
     auto_update_repo: bool,
     auto_update_interval: Duration,
     state_root: &Path,
-    update_runner: F,
+    spawn_runner: F,
 ) -> Result<bool>
 where
-    F: FnOnce(&Path) -> Result<()>,
+    F: FnOnce(&str, &Path) -> Result<()>,
 {
     if !auto_update_repo {
         return Ok(false);
@@ -181,25 +188,33 @@ where
         return Ok(false);
     }
 
-    update_runner(checkout_path)?;
-    write_github_repo_sync_stamp(state_root, github_repo)?;
+    let Some(lock_guard) = try_acquire_github_repo_sync_lock(state_root, github_repo)? else {
+        return Ok(false);
+    };
+
+    if let Err(error) = spawn_runner(github_repo, checkout_path) {
+        drop(lock_guard);
+        return Err(error);
+    }
+
+    std::mem::forget(lock_guard);
     Ok(true)
 }
 
-pub(crate) fn maybe_update_github_repo_checkout(
+pub(crate) fn maybe_schedule_github_repo_checkout_update(
     github_repo: &str,
     checkout_path: &Path,
     auto_update_repo: bool,
     auto_update_interval: Duration,
 ) -> Result<bool> {
     let state_root = get_default_github_state_root();
-    maybe_update_github_repo_checkout_with_runner(
+    maybe_schedule_github_repo_checkout_update_with_runner(
         github_repo,
         checkout_path,
         auto_update_repo,
         auto_update_interval,
         &state_root,
-        pull_github_repo,
+        spawn_background_github_repo_sync,
     )
 }
 
@@ -252,6 +267,82 @@ where
 pub(crate) fn ensure_github_repo_checkout(github_repo: &str) -> Result<(PathBuf, bool)> {
     let checkout_root = get_default_github_checkout_root();
     ensure_github_repo_checkout_with_runner(github_repo, &checkout_root, clone_github_repo)
+}
+
+pub(crate) fn complete_background_github_repo_sync(
+    github_repo: &str,
+    checkout_path: &Path,
+) -> Result<()> {
+    let state_root = get_default_github_state_root();
+    let lock_path = get_github_repo_sync_lock_path(&state_root, github_repo)?;
+    let _lock_guard = GithubRepoSyncLock::from_existing(lock_path);
+    force_update_github_repo_checkout(github_repo, checkout_path)
+}
+
+fn spawn_background_github_repo_sync(github_repo: &str, checkout_path: &Path) -> Result<()> {
+    let current_exe = env::current_exe()
+        .map_err(|error| format!("Failed to resolve the current executable: {error}"))?;
+
+    ProcessCommand::new(current_exe)
+        .arg("--__background-sync-repo")
+        .arg(github_repo)
+        .arg("--__background-sync-checkout")
+        .arg(checkout_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("Failed to schedule a background repository sync: {error}").into())
+}
+
+struct GithubRepoSyncLock {
+    path: PathBuf,
+}
+
+impl GithubRepoSyncLock {
+    fn from_existing(path: PathBuf) -> Self {
+        Self { path }
+    }
+}
+
+impl Drop for GithubRepoSyncLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn try_acquire_github_repo_sync_lock(
+    state_root: &Path,
+    github_repo: &str,
+) -> Result<Option<GithubRepoSyncLock>> {
+    fs::create_dir_all(state_root)?;
+    let lock_path = get_github_repo_sync_lock_path(state_root, github_repo)?;
+
+    for attempt in 0..2 {
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+        {
+            Ok(_) => return Ok(Some(GithubRepoSyncLock { path: lock_path })),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                if attempt == 0
+                    && should_refresh_github_repo_state(
+                        &lock_path,
+                        BACKGROUND_SYNC_LOCK_STALE_AFTER,
+                    )
+                {
+                    let _ = fs::remove_file(&lock_path);
+                    continue;
+                }
+                return Ok(None);
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+
+    Ok(None)
 }
 
 fn detect_default_base_branch(checkout_path: &Path) -> Result<String> {
@@ -373,7 +464,7 @@ mod tests {
     use super::{
         ensure_github_repo_checkout_with_runner, force_update_github_repo_checkout_with_runner,
         get_github_repo_checkout_path, get_github_repo_sync_stamp_path,
-        maybe_update_github_repo_checkout_with_runner, normalize_github_repo_input,
+        maybe_schedule_github_repo_checkout_update_with_runner, normalize_github_repo_input,
         validate_github_repo_name, DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES,
     };
     use std::fs;
@@ -487,19 +578,20 @@ mod tests {
     }
 
     #[test]
-    fn test_maybe_update_github_repo_checkout_with_runner_updates_when_due() {
+    fn test_maybe_schedule_github_repo_checkout_update_with_runner_updates_when_due() {
         let temp_dir = TempDir::new().unwrap();
         let checkout_path = temp_dir.path().join("acme__shared-shellshelf");
         let state_root = temp_dir.path().join("state");
         fs::create_dir_all(&checkout_path).unwrap();
 
-        let was_updated = maybe_update_github_repo_checkout_with_runner(
+        let was_updated = maybe_schedule_github_repo_checkout_update_with_runner(
             "acme/shared-shellshelf",
             &checkout_path,
             true,
             Duration::from_secs(DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES * 60),
             &state_root,
-            |path| {
+            |repo, path| {
+                assert_eq!(repo, "acme/shared-shellshelf");
                 assert_eq!(path, checkout_path.as_path());
                 Ok(())
             },
@@ -507,23 +599,25 @@ mod tests {
         .unwrap();
 
         assert!(was_updated);
-        assert!(state_root.join("acme__shared-shellshelf.sync").exists());
+        assert!(state_root
+            .join("acme__shared-shellshelf.sync.lock")
+            .exists());
     }
 
     #[test]
-    fn test_maybe_update_github_repo_checkout_with_runner_respects_disable_flag() {
+    fn test_maybe_schedule_github_repo_checkout_update_with_runner_respects_disable_flag() {
         let temp_dir = TempDir::new().unwrap();
         let checkout_path = temp_dir.path().join("acme__shared-shellshelf");
         let state_root = temp_dir.path().join("state");
         fs::create_dir_all(&checkout_path).unwrap();
 
-        let was_updated = maybe_update_github_repo_checkout_with_runner(
+        let was_updated = maybe_schedule_github_repo_checkout_update_with_runner(
             "acme/shared-shellshelf",
             &checkout_path,
             false,
             Duration::from_secs(DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES * 60),
             &state_root,
-            |_path| Err("update should not run".into()),
+            |_repo, _path| Err("update should not run".into()),
         )
         .unwrap();
 
@@ -532,7 +626,7 @@ mod tests {
     }
 
     #[test]
-    fn test_maybe_update_github_repo_checkout_with_runner_skips_recent_sync() {
+    fn test_maybe_schedule_github_repo_checkout_update_with_runner_skips_recent_sync() {
         let temp_dir = TempDir::new().unwrap();
         let checkout_path = temp_dir.path().join("acme__shared-shellshelf");
         let state_root = temp_dir.path().join("state");
@@ -541,13 +635,13 @@ mod tests {
         fs::create_dir_all(&state_root).unwrap();
         fs::write(&sync_stamp_path, b"updated").unwrap();
 
-        let was_updated = maybe_update_github_repo_checkout_with_runner(
+        let was_updated = maybe_schedule_github_repo_checkout_update_with_runner(
             "acme/shared-shellshelf",
             &checkout_path,
             true,
             Duration::from_secs(DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES * 60),
             &state_root,
-            |_path| Err("update should not run".into()),
+            |_repo, _path| Err("update should not run".into()),
         )
         .unwrap();
 
