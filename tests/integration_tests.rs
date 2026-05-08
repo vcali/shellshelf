@@ -3,6 +3,8 @@ use predicates::prelude::*;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 #[cfg(unix)]
@@ -217,6 +219,25 @@ mkdir -p \"$4\"\n",
     }
 
     (gh_path, log_path)
+}
+
+fn wait_for_file_to_contain(path: &Path, needle: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Ok(contents) = fs::read_to_string(path) {
+            if contents.contains(needle) {
+                return;
+            }
+        }
+
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for '{}' to appear in {}",
+            needle,
+            path.display()
+        );
+        thread::sleep(Duration::from_millis(50));
+    }
 }
 
 fn write_mock_git(temp_dir: &Path) -> (PathBuf, PathBuf) {
@@ -1791,6 +1812,7 @@ fn test_github_mode_updates_existing_checkout_when_due() {
 
     cmd.assert().success();
 
+    wait_for_file_to_contain(&git_log_path, "pull");
     let git_args = fs::read_to_string(git_log_path).unwrap();
     assert!(git_args.contains("-C"));
     assert!(git_args.contains("symbolic-ref"));

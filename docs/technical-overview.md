@@ -115,6 +115,7 @@ Current GitHub support is intentionally conservative:
 - add-time personal merge treats command strings as identity, removes duplicates, and upgrades descriptions when one side is clearly richer
 - bootstrap uses `gh repo clone`
 - refresh uses `git pull --ff-only`
+- normal interval-based refreshes are detached background jobs so startup reads keep using the current checkout instead of blocking on Git I/O
 - force sync reuses the same checkout refresh path but skips the interval gate
 - refresh state is tracked in `~/.shellshelf/state`
 - refresh cadence is configurable with `shared_repo.auto_update_interval_minutes` and `personal_repo.auto_update_interval_minutes`

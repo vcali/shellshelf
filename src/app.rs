@@ -12,7 +12,8 @@ use crate::config::{
 };
 use crate::database::{CommandDatabase, StoredCommand};
 use crate::github::{
-    normalize_github_repo_input, DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES,
+    complete_background_github_repo_sync, normalize_github_repo_input,
+    DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES,
 };
 use crate::personal_repo::{
     bootstrap_personal_repo, personal_repo_sync_warning, sync_all_personal_shelves,
@@ -154,9 +155,16 @@ pub fn run() -> Result<()> {
     }
 
     let matches = build_cli().get_matches();
+    if let Some(github_repo) = matches.get_one::<String>("background-sync-repo") {
+        let checkout_path = matches
+            .get_one::<String>("background-sync-checkout")
+            .ok_or("Internal background sync requires a checkout path.")?;
+        return complete_background_github_repo_sync(github_repo, Path::new(checkout_path));
+    }
+
     let config_path = resolve_config_path(&matches);
-    let config = resolve_config(&matches)?;
     validate_matches(&matches)?;
+    let config = resolve_config(&matches)?;
     let add_repo = matches.get_one::<String>("add-repo");
     let add_personal_repo = matches.get_one::<String>("add-personal-repo");
     let personal_repo_bootstrap = matches
@@ -185,24 +193,24 @@ pub fn run() -> Result<()> {
         );
     }
 
-    let all_teams = matches.get_flag("all-teams");
-    let shared_context =
-        resolve_shared_storage_context_with_options(&matches, &config, force_sync)?;
-    let personal_context = resolve_personal_storage_context(&config, force_sync_personal)?;
-
-    if !force_sync_personal && !sync_personal {
-        emit_personal_repo_sync_warning(personal_context.as_ref());
-    }
-
     if force_sync {
+        let shared_context = resolve_shared_storage_context_with_options(&matches, &config, true)?;
         return run_force_sync(shared_context.as_ref());
     }
     if force_sync_personal {
+        let personal_context = resolve_personal_storage_context(&config, true)?;
         return run_personal_force_sync(personal_context.as_ref());
     }
     if sync_personal {
+        let personal_context = resolve_personal_storage_context(&config, true)?;
         return run_personal_sync(personal_context.as_ref());
     }
+
+    let all_teams = matches.get_flag("all-teams");
+    let shared_context = resolve_shared_storage_context_with_options(&matches, &config, false)?;
+    let personal_context = resolve_personal_storage_context(&config, false)?;
+
+    emit_personal_repo_sync_warning(personal_context.as_ref());
 
     if matches.get_flag("web") {
         return run_web_server(

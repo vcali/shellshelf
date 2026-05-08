@@ -1,8 +1,8 @@
 use crate::database::{CommandDatabase, StoredCommand};
 use crate::github::{
     ensure_github_repo_checkout, force_update_github_repo_checkout, get_default_github_state_root,
-    maybe_update_github_repo_checkout, validate_github_repo_name, write_github_repo_sync_stamp,
-    DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES,
+    maybe_schedule_github_repo_checkout_update, validate_github_repo_name,
+    write_github_repo_sync_stamp, DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES,
 };
 use crate::Result;
 use clap::ArgMatches;
@@ -900,13 +900,15 @@ pub(crate) fn resolve_personal_storage_context(
                     &github_config.github_repo,
                 );
             } else if !skip_config_auto_update {
-                if let Err(error) = maybe_update_github_repo_checkout(
+                if let Err(error) = maybe_schedule_github_repo_checkout_update(
                     &github_config.github_repo,
                     &checkout_path,
                     github_config.auto_update_repo,
                     github_config.auto_update_interval(),
                 ) {
-                    eprintln!("Warning: failed to update personal repository checkout: {error}");
+                    eprintln!(
+                        "Warning: failed to schedule a background refresh for the personal repository checkout: {error}"
+                    );
                 }
             }
 
@@ -940,13 +942,15 @@ fn resolve_repository_root_from_config(
                     &github_config.github_repo,
                 );
             } else if !skip_auto_update {
-                if let Err(error) = maybe_update_github_repo_checkout(
+                if let Err(error) = maybe_schedule_github_repo_checkout_update(
                     &github_config.github_repo,
                     &checkout_path,
                     github_config.auto_update_repo,
                     github_config.auto_update_interval(),
                 ) {
-                    eprintln!("Warning: failed to update shared repository checkout: {error}");
+                    eprintln!(
+                        "Warning: failed to schedule a background refresh for the shared repository checkout: {error}"
+                    );
                 }
             }
             Ok(Some(checkout_path))
