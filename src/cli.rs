@@ -1,4 +1,4 @@
-use clap::{Arg, Command};
+use clap::{Arg, ArgAction, Command};
 
 pub(crate) fn build_cli() -> Command {
     Command::new("shellshelf")
@@ -29,6 +29,43 @@ pub(crate) fn build_cli() -> Command {
                 .long("description")
                 .value_name("TEXT")
                 .help("Optional brief description for --add"),
+        )
+        .arg(
+            Arg::new("name")
+                .long("name")
+                .value_name("NAME")
+                .help("Stable command name for --add"),
+        )
+        .arg(
+            Arg::new("get")
+                .long("get")
+                .value_name("REF")
+                .help("Get a named command by canonical reference"),
+        )
+        .arg(
+            Arg::new("render")
+                .long("render")
+                .value_name("REF")
+                .help("Render a named command template by canonical reference"),
+        )
+        .arg(
+            Arg::new("arg")
+                .long("arg")
+                .value_name("NAME=VALUE")
+                .action(ArgAction::Append)
+                .help("Template argument for --render; may be repeated"),
+        )
+        .arg(
+            Arg::new("raw")
+                .long("raw")
+                .action(ArgAction::SetTrue)
+                .help("Print only the command for --get or --render"),
+        )
+        .arg(
+            Arg::new("json")
+                .long("json")
+                .action(ArgAction::SetTrue)
+                .help("Emit compact, versioned JSON for agent-oriented operations"),
         )
         .arg(
             Arg::new("import-postman")
@@ -73,7 +110,7 @@ pub(crate) fn build_cli() -> Command {
                 .long("limit")
                 .value_name("COUNT")
                 .value_parser(clap::value_parser!(usize))
-                .help("Limit how many commands are shown with --list (0 means unlimited)"),
+                .help("Limit search or list results globally (0 means unlimited)"),
         )
         .arg(
             Arg::new("config")

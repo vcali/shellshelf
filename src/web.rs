@@ -59,11 +59,13 @@ struct WebShelfData {
 
 #[derive(Debug, Serialize)]
 struct WebCommandEntry {
+    name: Option<String>,
     command: String,
     preview_command: String,
     description: Option<String>,
     runnable: bool,
     unsupported_reason: Option<String>,
+    parameters: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +93,7 @@ struct SaveCommandRequest {
     team: Option<String>,
     shelf: String,
     original_command: Option<String>,
+    name: Option<String>,
     command: String,
     description: Option<String>,
 }
@@ -308,11 +311,14 @@ async fn save_command(
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
 
-    let outcome = database.save_command(
-        payload.original_command.as_deref(),
-        payload.command.clone(),
-        description,
-    );
+    let outcome = database
+        .save_command(
+            payload.original_command.as_deref(),
+            payload.command.clone(),
+            description,
+            payload.name,
+        )
+        .map_err(|error| WebError::bad_request(error.to_string()))?;
 
     if outcome == SaveCommandOutcome::Duplicate {
         return Err(WebError::bad_request(format!(
@@ -415,8 +421,15 @@ fn map_shelf(shelf: ShelfData) -> WebShelfData {
 
 fn map_command(command: CommandEntry) -> WebCommandEntry {
     let analysis = analyze_command(&command.command);
+    let parameters = if command.name.is_some() {
+        crate::template::parameters(&command.command).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     WebCommandEntry {
+        name: command.name,
         preview_command: format_command_preview(&command.command),
+        parameters,
         command: command.command,
         description: command.description,
         runnable: analysis.runnable,
@@ -751,6 +764,7 @@ mod tests {
                         r#"{
                             "scope":"local",
                             "shelf":"media",
+                            "name":"repo-status",
                             "command":"git status",
                             "description":"Repository status"
                         }"#,
@@ -765,6 +779,7 @@ mod tests {
         let saved =
             fs::read_to_string(temp_dir.path().join("local-shelves").join("media.json")).unwrap();
         assert!(saved.contains("git status"));
+        assert!(saved.contains("repo-status"));
         assert!(saved.contains("Repository status"));
     }
 

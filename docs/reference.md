@@ -220,6 +220,12 @@ Precedence:
 - `--web-port <PORT>`: port for the localhost web interface. Overrides config and otherwise defaults to `4812`
 - `-a`, `--add <COMMAND>`: add a command to the active storage target
 - `--description <TEXT>`: optional brief description for `--add`
+- `--name <NAME>`: optional stable name for `--add`; names are unique within a shelf
+- `--get <REF>`: retrieve a named command by `local/<shelf>/<name>` or `shared/<team>/<shelf>/<name>`
+- `--render <REF>`: render a named command template without executing it
+- `--arg <NAME=VALUE>`: repeatable required parameter for `--render`
+- `--raw`: print only command text for `--get` or `--render`; mutually exclusive with `--json`
+- `--json`: emit compact, versioned JSON for add, search, list, shelf discovery, get, or render
 - `--import-postman <PATH>`: import an exported Postman collection JSON into a new shelf
 - `--target-shelf <NAME>`: override the new shelf name when importing from Postman
 - `-s`, `--shelf <NAME>`: active shelf
@@ -241,7 +247,7 @@ Precedence:
 - `--all-teams`: list or search across every team in the same shelf
 - `--local-only`: limit default list/search commands to local storage
 - `--shared-only`: limit default list/search commands to shared storage
-- `--limit <COUNT>`: limit how many commands are shown with `--list`. `0` means unlimited
+- `--limit <COUNT>`: apply one global limit to list or search results. `0` means unlimited; search remains unlimited by default
 
 ### Personal sync options
 
@@ -264,6 +270,34 @@ Precedence:
 
 `--sync-personal` is standalone. It copies every local shelf file into the configured personal repository, then commits and pushes any resulting changes.
 
+## Named Commands and Templates
+
+Stable names make commands directly addressable without repeating a broad search:
+
+```bash
+shellshelf -s curl --name github-user \
+  --add 'curl "https://api.github.com/users/{{user}}"' \
+  --description "Fetch a GitHub user" --json
+
+shellshelf --get local/curl/github-user --raw
+shellshelf --render local/curl/github-user --arg user=octocat --json
+```
+
+Names are optional, case-insensitively unique within one shelf, at most 80 bytes, and contain lowercase letters, digits, dots, underscores, or hyphens. They start with a letter or digit. Exact duplicate `--add` calls may attach a name to an unnamed legacy entry without changing its stored description.
+
+Named commands use canonical references:
+
+- `local/<shelf>/<name>`
+- `shared/<team>/<shelf>/<name>`
+
+Unnamed legacy commands remain searchable and listable but cannot be retrieved by reference or rendered. JSON results expose their `name` and `ref` as `null`.
+
+Named commands may contain required `{{parameter}}` placeholders. Parameter names start with a lowercase letter and contain lowercase letters, digits, underscores, or hyphens. `--render` requires exactly one value for every parameter, rejects unknown or duplicate values, escapes values for their POSIX shell quote context, and only prints the result—it never executes it.
+
+For agent workflows, search first with `--limit 3 --json`, add a named command only when no suitable result exists, and retain the returned canonical `ref` for later `--get` or `--render` calls. Do not store live credentials.
+
+Machine output uses `schema_version: 1`. Search and list return `results` plus `summary.hidden_duplicates` and `summary.hidden_by_limit`; exact get/render return one `result`; add returns `operation: "add"`, a status of `added`, `named_existing`, or `unchanged`, the resulting command record, and `pull_request_url`. `--raw` prints only command text plus a final newline.
+
 ## Web Interface
 
 `shellshelf --web` runs a localhost-only web interface for interactive HTTP work.
@@ -277,7 +311,7 @@ Current behavior:
 - renders local shelves and shared team shelves in an expandable tree explorer
 - adds a Shared reload button that re-reads shared shelves and force-syncs first when the shared source is a managed GitHub checkout
 - shows all stored commands, but only runs commands that validate as supported curl commands
-- loads selected commands into an editable workbench with editable description and command fields
+- loads selected commands into an editable workbench with editable stable-name, description, and command fields
 - can create shelves in the visible local or team-scoped shared area
 - can save new commands or update the selected command in the current shelf
 - local shelf creates and saves also sync into `personal_repo` when configured
@@ -364,7 +398,7 @@ Import behavior:
 - `--repo` and `--teams-dir` may be used for default read commands without `--team`
 - `--repo` and `--teams-dir` still require `--team` for write commands
 - `--description` can only be used with `--add`
-- `--limit` can only be used with `--list`
+- `--limit` can only be used with `--list` or search keywords
 - `--shelf` cannot be used with `--list-shelves`
 - `--list-shelves` cannot be combined with `--add`, `--list`, `--create-shelf`, `--description`, `--limit`, or search keywords
 - `--shelf` cannot be used with `--import-postman`; use `--target-shelf` instead
