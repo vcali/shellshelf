@@ -47,6 +47,15 @@ shellshelf --team platform -s aws --name tail-logs \
 
 Use lowercase names containing letters, digits, dots, underscores, or hyphens. Prefer names for anything likely to be reused. An exact duplicate `--add` can attach a name to a legacy unnamed command.
 
+## What to Store
+
+Store a command when retrieving it later will save meaningful discovery or reconstruction work and it remains understandable without the current conversation.
+
+- Store verified, non-obvious commands that are likely to recur and remain useful outside the current task.
+- Use a template when only a few values vary between runs.
+- Prefer a repository script, Make target, or task runner for multi-step logic, branching, or behavior tightly coupled to repository internals.
+- Do not store trivial commands, one-off paths or IDs, temporary debugging commands, incomplete fragments, unsafe destructive commands, or commands containing live secrets.
+
 ## Guardrails
 
 - Never store live tokens, cookies, passwords, or API keys. Keep references such as `$TOKEN` or use template parameters.
