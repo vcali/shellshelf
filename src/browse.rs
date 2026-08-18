@@ -27,6 +27,7 @@ pub(crate) struct ShelfData {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct CommandEntry {
+    pub(crate) name: Option<String>,
     pub(crate) command: String,
     pub(crate) description: Option<String>,
 }
@@ -34,6 +35,7 @@ pub(crate) struct CommandEntry {
 impl CommandEntry {
     fn from_stored(command: StoredCommand) -> Self {
         Self {
+            name: command.name,
             command: command.command,
             description: command.description,
         }
@@ -222,6 +224,7 @@ mod tests {
                 local: vec![ShelfData {
                     shelf: "curl".to_string(),
                     commands: vec![CommandEntry {
+                        name: None,
                         command: "curl https://local.example.com/health".to_string(),
                         description: Some("Local health".to_string()),
                     }],
@@ -231,6 +234,7 @@ mod tests {
                     shelves: vec![ShelfData {
                         shelf: "curl".to_string(),
                         commands: vec![CommandEntry {
+                            name: None,
                             command: "curl https://shared.example.com/health".to_string(),
                             description: Some("Shared health".to_string()),
                         }],

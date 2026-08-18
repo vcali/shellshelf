@@ -6,6 +6,8 @@ use std::path::Path;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub(crate) struct StoredCommand {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) name: Option<String>,
     pub(crate) command: String,
     #[serde(default)]
     pub(crate) description: Option<String>,
@@ -13,7 +15,16 @@ pub(crate) struct StoredCommand {
 }
 
 impl StoredCommand {
+    #[cfg(test)]
     pub(crate) fn new(command: String, description: Option<String>) -> Self {
+        Self::with_name(command, description, None)
+    }
+
+    pub(crate) fn with_name(
+        command: String,
+        description: Option<String>,
+        name: Option<String>,
+    ) -> Self {
         let mut keywords = extract_keywords(&command);
 
         if let Some(description) = description.as_deref() {
@@ -26,11 +37,19 @@ impl StoredCommand {
         }
 
         Self {
+            name,
             command,
             description,
             keywords,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AddCommandOutcome {
+    Added,
+    NamedExisting,
+    Unchanged,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -62,6 +81,7 @@ impl CommandDatabase {
         if path.exists() {
             let content = fs::read_to_string(path)?;
             let db: CommandDatabase = serde_json::from_str(&content)?;
+            db.validate_names()?;
             Ok(db)
         } else {
             Ok(Self::new())
@@ -69,6 +89,7 @@ impl CommandDatabase {
     }
 
     pub(crate) fn save_to_file(&self, path: &Path) -> Result<()> {
+        self.validate_names()?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -78,16 +99,52 @@ impl CommandDatabase {
     }
 
     pub(crate) fn add_command(&mut self, command: String, description: Option<String>) -> bool {
-        if self
+        matches!(
+            self.add_named_command(command, description, None),
+            Ok(AddCommandOutcome::Added)
+        )
+    }
+
+    pub(crate) fn add_named_command(
+        &mut self,
+        command: String,
+        description: Option<String>,
+        name: Option<String>,
+    ) -> Result<AddCommandOutcome> {
+        let name = normalize_name(name)?;
+        if name.is_some() {
+            crate::template::parameters(&command)?;
+        }
+
+        if let Some(existing_index) = self
             .commands
             .iter()
-            .any(|existing| existing.command == command)
+            .position(|existing| existing.command == command)
         {
-            false
-        } else {
-            self.commands.push(StoredCommand::new(command, description));
-            true
+            let existing_name = self.commands[existing_index].name.clone();
+            return match (existing_name, name) {
+                (None, Some(name)) => {
+                    self.ensure_name_available(&name, Some(existing_index))?;
+                    self.commands[existing_index].name = Some(name);
+                    Ok(AddCommandOutcome::NamedExisting)
+                }
+                (Some(existing), Some(requested)) if existing.eq_ignore_ascii_case(&requested) => {
+                    Ok(AddCommandOutcome::Unchanged)
+                }
+                (Some(existing), Some(requested)) => Err(format!(
+                    "Command already has name '{existing}' and cannot also be named '{requested}'."
+                )
+                .into()),
+                (_, None) => Ok(AddCommandOutcome::Unchanged),
+            };
         }
+
+        if let Some(name) = name.as_deref() {
+            self.ensure_name_available(name, None)?;
+        }
+        self.commands
+            .push(StoredCommand::with_name(command, description, name));
+        Ok(AddCommandOutcome::Added)
     }
 
     pub(crate) fn save_command(
@@ -95,7 +152,9 @@ impl CommandDatabase {
         original_command: Option<&str>,
         command: String,
         description: Option<String>,
-    ) -> SaveCommandOutcome {
+        name: Option<String>,
+    ) -> Result<SaveCommandOutcome> {
+        let requested_name = normalize_name(name)?;
         if let Some(original_command) = original_command {
             if let Some(index) = self
                 .commands
@@ -111,34 +170,75 @@ impl CommandDatabase {
                         });
 
                 if collides {
-                    return SaveCommandOutcome::Duplicate;
+                    return Ok(SaveCommandOutcome::Duplicate);
                 }
 
-                self.commands[index] = StoredCommand::new(command, description);
-                return SaveCommandOutcome::Updated;
+                let name = requested_name.or_else(|| self.commands[index].name.clone());
+                if let Some(name) = name.as_deref() {
+                    self.ensure_name_available(name, Some(index))?;
+                    crate::template::parameters(&command)?;
+                }
+                self.commands[index] = StoredCommand::with_name(command, description, name);
+                return Ok(SaveCommandOutcome::Updated);
             }
         }
 
-        if self.add_command(command, description) {
-            SaveCommandOutcome::Added
-        } else {
-            SaveCommandOutcome::Duplicate
-        }
+        Ok(
+            match self.add_named_command(command, description, requested_name)? {
+                AddCommandOutcome::Added => SaveCommandOutcome::Added,
+                AddCommandOutcome::NamedExisting => SaveCommandOutcome::Updated,
+                AddCommandOutcome::Unchanged => SaveCommandOutcome::Duplicate,
+            },
+        )
     }
 
-    pub(crate) fn merged_with(&self, other: &Self) -> (Self, MergeDatabaseOutcome) {
+    pub(crate) fn find_by_name(&self, name: &str) -> Option<&StoredCommand> {
+        self.commands.iter().find(|command| {
+            command
+                .name
+                .as_deref()
+                .is_some_and(|stored| stored.eq_ignore_ascii_case(name))
+        })
+    }
+
+    fn ensure_name_available(&self, name: &str, except_index: Option<usize>) -> Result<()> {
+        if self.commands.iter().enumerate().any(|(index, command)| {
+            Some(index) != except_index
+                && command
+                    .name
+                    .as_deref()
+                    .is_some_and(|stored| stored.eq_ignore_ascii_case(name))
+        }) {
+            return Err(format!("Command name '{name}' already exists in this shelf.").into());
+        }
+        Ok(())
+    }
+
+    fn validate_names(&self) -> Result<()> {
+        for (index, command) in self.commands.iter().enumerate() {
+            if let Some(name) = command.name.as_deref() {
+                validate_command_name(name)?;
+                crate::template::parameters(&command.command)?;
+                self.ensure_name_available(name, Some(index))?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn merged_with(&self, other: &Self) -> Result<(Self, MergeDatabaseOutcome)> {
         let mut merged = Self::new();
         let mut outcome = MergeDatabaseOutcome::default();
 
         for command in &self.commands {
-            merge_command_into(&mut merged, command, &mut outcome);
+            merge_command_into(&mut merged, command, &mut outcome)?;
         }
 
         for command in &other.commands {
-            merge_command_into(&mut merged, command, &mut outcome);
+            merge_command_into(&mut merged, command, &mut outcome)?;
         }
 
-        (merged, outcome)
+        merged.validate_names()?;
+        Ok((merged, outcome))
     }
 
     pub(crate) fn search_in_shelf(&self, keywords: &[String], shelf: &str) -> Vec<&StoredCommand> {
@@ -162,6 +262,7 @@ impl CommandDatabase {
             .filter(|cmd| {
                 let command_lower = cmd.command.to_lowercase();
                 let description_lower = cmd.description.as_ref().map(|value| value.to_lowercase());
+                let name_lower = cmd.name.as_ref().map(|value| value.to_lowercase());
 
                 normalized_keywords.iter().all(|keyword| {
                     cmd.keywords.iter().any(|stored| stored.contains(keyword))
@@ -169,6 +270,9 @@ impl CommandDatabase {
                         || description_lower
                             .as_ref()
                             .is_some_and(|description| description.contains(keyword))
+                        || name_lower
+                            .as_ref()
+                            .is_some_and(|name| name.contains(keyword))
                         || shelf_lower
                             .as_ref()
                             .is_some_and(|shelf_name| shelf_name.contains(keyword))
@@ -183,7 +287,7 @@ fn merge_command_into(
     merged: &mut CommandDatabase,
     candidate: &StoredCommand,
     outcome: &mut MergeDatabaseOutcome,
-) {
+) -> Result<()> {
     if let Some(existing) = merged
         .commands
         .iter_mut()
@@ -194,15 +298,50 @@ fn merge_command_into(
             existing.description.as_deref(),
             candidate.description.as_deref(),
         );
-        if existing.description != merged_description {
+        let merged_name = existing.name.clone().or_else(|| candidate.name.clone());
+        let description_changed = existing.description != merged_description;
+        let name_changed = existing.name != merged_name;
+        if description_changed {
             outcome.descriptions_upgraded += 1;
-            *existing = StoredCommand::new(existing.command.clone(), merged_description);
+        }
+        if description_changed || name_changed {
+            *existing =
+                StoredCommand::with_name(existing.command.clone(), merged_description, merged_name);
         }
     } else {
-        merged.commands.push(StoredCommand::new(
-            candidate.command.clone(),
-            candidate.description.clone(),
-        ));
+        if let Some(name) = candidate.name.as_deref() {
+            merged.ensure_name_available(name, None)?;
+        }
+        merged.commands.push(candidate.clone());
+    }
+    Ok(())
+}
+
+fn normalize_name(name: Option<String>) -> Result<Option<String>> {
+    let name = name
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty());
+    if let Some(name) = name.as_deref() {
+        validate_command_name(name)?;
+    }
+    Ok(name)
+}
+
+pub(crate) fn validate_command_name(name: &str) -> Result<()> {
+    let valid = !name.is_empty()
+        && name.len() <= 80
+        && name
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())
+        && name.chars().all(|ch| {
+            ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '-' | '_' | '.')
+        });
+
+    if valid {
+        Ok(())
+    } else {
+        Err("Command names must be at most 80 characters and contain only lowercase letters, numbers, dots, underscores, and hyphens, starting with a letter or number.".into())
     }
 }
 
@@ -225,7 +364,9 @@ fn merge_descriptions(primary: Option<&str>, secondary: Option<&str>) -> Option<
 
 #[cfg(test)]
 mod tests {
-    use super::{CommandDatabase, MergeDatabaseOutcome, SaveCommandOutcome, StoredCommand};
+    use super::{
+        AddCommandOutcome, CommandDatabase, MergeDatabaseOutcome, SaveCommandOutcome, StoredCommand,
+    };
     use tempfile::TempDir;
 
     #[test]
@@ -277,6 +418,37 @@ mod tests {
     }
 
     #[test]
+    fn named_add_enriches_legacy_duplicate_and_enforces_unique_names() {
+        let mut db = CommandDatabase::new();
+        db.add_command("git status".to_string(), Some("Status".to_string()));
+
+        assert_eq!(
+            db.add_named_command(
+                "git status".to_string(),
+                Some("Ignored".to_string()),
+                Some("status".to_string()),
+            )
+            .unwrap(),
+            AddCommandOutcome::NamedExisting
+        );
+        assert_eq!(db.commands[0].name.as_deref(), Some("status"));
+        assert_eq!(db.commands[0].description.as_deref(), Some("Status"));
+        assert!(db
+            .add_named_command("git diff".to_string(), None, Some("STATUS".to_string()),)
+            .is_err());
+    }
+
+    #[test]
+    fn unnamed_commands_serialize_without_name_field() {
+        let json = serde_json::to_value(CommandDatabase {
+            commands: vec![StoredCommand::new("git status".to_string(), None)],
+        })
+        .unwrap();
+
+        assert!(json["commands"][0].get("name").is_none());
+    }
+
+    #[test]
     fn test_command_database_save_command_updates_existing_entry() {
         let mut db = CommandDatabase::new();
         db.add_command(
@@ -284,11 +456,14 @@ mod tests {
             Some("Old".to_string()),
         );
 
-        let outcome = db.save_command(
-            Some("curl https://example.com/old"),
-            "curl https://example.com/new".to_string(),
-            Some("Updated".to_string()),
-        );
+        let outcome = db
+            .save_command(
+                Some("curl https://example.com/old"),
+                "curl https://example.com/new".to_string(),
+                Some("Updated".to_string()),
+                None,
+            )
+            .unwrap();
 
         assert_eq!(outcome, SaveCommandOutcome::Updated);
         assert_eq!(db.commands.len(), 1);
@@ -302,11 +477,14 @@ mod tests {
         db.add_command("curl https://example.com/one".to_string(), None);
         db.add_command("curl https://example.com/two".to_string(), None);
 
-        let outcome = db.save_command(
-            Some("curl https://example.com/one"),
-            "curl https://example.com/two".to_string(),
-            None,
-        );
+        let outcome = db
+            .save_command(
+                Some("curl https://example.com/one"),
+                "curl https://example.com/two".to_string(),
+                None,
+                None,
+            )
+            .unwrap();
 
         assert_eq!(outcome, SaveCommandOutcome::Duplicate);
         assert_eq!(db.commands.len(), 2);
@@ -488,7 +666,7 @@ mod tests {
             ],
         };
 
-        let (merged, outcome) = local.merged_with(&remote);
+        let (merged, outcome) = local.merged_with(&remote).unwrap();
 
         assert_eq!(
             merged.commands,
@@ -525,7 +703,7 @@ mod tests {
             )],
         };
 
-        let (merged, outcome) = local.merged_with(&remote);
+        let (merged, outcome) = local.merged_with(&remote).unwrap();
 
         assert_eq!(merged.commands.len(), 1);
         assert_eq!(
@@ -539,5 +717,25 @@ mod tests {
                 descriptions_upgraded: 0,
             }
         );
+    }
+
+    #[test]
+    fn merge_rejects_same_name_on_different_commands() {
+        let local = CommandDatabase {
+            commands: vec![StoredCommand::with_name(
+                "git status".to_string(),
+                None,
+                Some("status".to_string()),
+            )],
+        };
+        let remote = CommandDatabase {
+            commands: vec![StoredCommand::with_name(
+                "git diff".to_string(),
+                None,
+                Some("status".to_string()),
+            )],
+        };
+
+        assert!(local.merged_with(&remote).is_err());
     }
 }

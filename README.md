@@ -131,6 +131,20 @@ shellshelf -s git -a "git log --oneline --graph -20" \
   --description "Compact recent history graph"
 ```
 
+Add a named, parameterized command for deterministic agent reuse:
+
+```bash
+shellshelf -s curl --name github-user \
+  --add 'curl "https://api.github.com/users/{{user}}"' \
+  --description "Fetch a GitHub user" --json
+
+shellshelf github user --limit 3 --json
+shellshelf --get local/curl/github-user --raw
+shellshelf --render local/curl/github-user --arg user=octocat --raw
+```
+
+Names are optional for compatibility and unique within a shelf. Named local commands use references such as `local/curl/github-user`; shared commands use `shared/<team>/<shelf>/<name>`. Rendering substitutes and shell-escapes required `{{parameter}}` values but never executes the command.
+
 List a shelf:
 
 ```bash

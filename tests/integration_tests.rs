@@ -2919,3 +2919,161 @@ fn test_import_postman_rejects_shelf_flag_and_points_to_target_shelf() {
         "--shelf cannot be used with --import-postman. Use --target-shelf instead.",
     ));
 }
+
+#[test]
+fn test_named_add_get_and_render_local_command() {
+    let temp_dir = TempDir::new().unwrap();
+    let template = r#"curl "https://api.example.com/users/{{user}}""#;
+
+    let add = Command::cargo_bin("shellshelf")
+        .unwrap()
+        .env("HOME", temp_dir.path())
+        .args([
+            "--shelf",
+            "curl",
+            "--add",
+            template,
+            "--name",
+            "fetch-user",
+            "--description",
+            "Fetch a user",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        add.status.success(),
+        "{}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+    let add_json: serde_json::Value = serde_json::from_slice(&add.stdout).unwrap();
+    assert_eq!(add_json["status"], "added");
+    assert_eq!(add_json["result"]["ref"], "local/curl/fetch-user");
+    assert_eq!(add_json["result"]["parameters"][0], "user");
+
+    let get = Command::cargo_bin("shellshelf")
+        .unwrap()
+        .env("HOME", temp_dir.path())
+        .args(["--get", "local/curl/fetch-user", "--raw"])
+        .output()
+        .unwrap();
+    assert!(get.status.success());
+    assert_eq!(
+        String::from_utf8(get.stdout).unwrap(),
+        format!("{template}\n")
+    );
+
+    let render = Command::cargo_bin("shellshelf")
+        .unwrap()
+        .env("HOME", temp_dir.path())
+        .args([
+            "--render",
+            "local/curl/fetch-user",
+            "--arg",
+            "user=alice; echo unsafe",
+            "--raw",
+        ])
+        .output()
+        .unwrap();
+    assert!(render.status.success());
+    assert_eq!(
+        String::from_utf8(render.stdout).unwrap(),
+        "curl \"https://api.example.com/users/alice; echo unsafe\"\n"
+    );
+}
+
+#[test]
+fn test_named_add_enriches_exact_legacy_duplicate() {
+    let temp_dir = TempDir::new().unwrap();
+    let shelf_dir = temp_dir.path().join(".shellshelf").join("shelves");
+    fs::create_dir_all(&shelf_dir).unwrap();
+    fs::write(
+        shelf_dir.join("git.json"),
+        r#"{"commands":[{"command":"git status","description":"Stored description","keywords":["git","status"]}]}"#,
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("shellshelf")
+        .unwrap()
+        .env("HOME", temp_dir.path())
+        .args([
+            "--shelf",
+            "git",
+            "--add",
+            "git status",
+            "--name",
+            "status",
+            "--description",
+            "Ignored replacement",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["status"], "named_existing");
+    assert_eq!(json["result"]["description"], "Stored description");
+}
+
+#[test]
+fn test_json_search_limit_is_global_and_reports_hidden_results() {
+    let temp_dir = TempDir::new().unwrap();
+    for (name, command) in [("one", "echo agent one"), ("two", "echo agent two")] {
+        Command::cargo_bin("shellshelf")
+            .unwrap()
+            .env("HOME", temp_dir.path())
+            .args(["--shelf", "ops", "--add", command, "--name", name])
+            .assert()
+            .success();
+    }
+
+    let output = Command::cargo_bin("shellshelf")
+        .unwrap()
+        .env("HOME", temp_dir.path())
+        .args(["agent", "--limit", "1", "--json", "--local-only"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["results"].as_array().unwrap().len(), 1);
+    assert_eq!(json["summary"]["hidden_by_limit"], 1);
+}
+
+#[test]
+fn test_shared_named_command_uses_canonical_reference() {
+    let temp_dir = TempDir::new().unwrap();
+    let shared_repo = temp_dir.path().join("shared");
+    fs::create_dir_all(&shared_repo).unwrap();
+
+    Command::cargo_bin("shellshelf")
+        .unwrap()
+        .env("HOME", temp_dir.path())
+        .args([
+            "--repo",
+            shared_repo.to_str().unwrap(),
+            "--team",
+            "platform",
+            "--shelf",
+            "runbooks",
+            "--add",
+            "echo healthy",
+            "--name",
+            "health",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("shellshelf")
+        .unwrap()
+        .env("HOME", temp_dir.path())
+        .args([
+            "--repo",
+            shared_repo.to_str().unwrap(),
+            "--get",
+            "shared/platform/runbooks/health",
+            "--raw",
+        ])
+        .assert()
+        .success()
+        .stdout("echo healthy\n");
+}

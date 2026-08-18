@@ -16,6 +16,7 @@ const state = {
 };
 
 const sidebarContent = document.getElementById("sidebarContent");
+const nameEditor = document.getElementById("nameEditor");
 const descriptionEditor = document.getElementById("descriptionEditor");
 const commandEditor = document.getElementById("commandEditor");
 const commandEditorShell = document.getElementById("commandEditorShell");
@@ -403,6 +404,7 @@ function renderEmptySelection() {
 }
 
 function hydrateEditorFromCommand(command) {
+  nameEditor.value = command.name || "";
   descriptionEditor.value = command.description || "";
   commandEditor.value = command.command;
   syncEditorState();
@@ -410,6 +412,7 @@ function hydrateEditorFromCommand(command) {
 
 function clearEditor() {
   state.selectedCommand = null;
+  nameEditor.value = "";
   descriptionEditor.value = "";
   commandEditor.value = "";
   syncEditorState();
@@ -453,6 +456,7 @@ async function saveCommandToShelf() {
         team: state.selectedTeam,
         shelf: state.selectedShelf,
         original_command: state.selectedCommand,
+        name: nameEditor.value.trim() || null,
         command,
         description: descriptionEditor.value.trim() || null,
       }),

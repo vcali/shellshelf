@@ -3,6 +3,7 @@ pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 mod app;
 mod browse;
 mod cli;
+mod command_ref;
 mod config;
 mod curl_runner;
 mod database;
@@ -11,6 +12,7 @@ mod keywords;
 mod personal_repo;
 mod postman_import;
 mod shared_repo_publish;
+mod template;
 mod web;
 
 pub use app::run;

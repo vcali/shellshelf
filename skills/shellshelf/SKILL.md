@@ -1,131 +1,66 @@
 ---
 name: shellshelf
-description: Search, reuse, and record commands in shellshelf instead of re-deriving them from scratch. Use when Codex needs a likely-existing `curl`, `git`, `aws`, or other shell command from a personal or shared team shelf; when a user asks for a repeatable API request or operational snippet; or when Codex should save a newly discovered reusable command back into shellshelf.
+description: Find, retrieve, render, and save reusable shell commands with shellshelf. Use when Codex needs a likely-existing curl, git, aws, kubectl, API, or operational command; should avoid re-deriving repeated commands; needs a parameterized command template; or should store a reusable command in a local or shared team shelf.
 ---
 
-# shellshelf
+# Shellshelf
 
-## Quick Start
-
-- Search `shellshelf` before inventing a command that might already exist.
-- Prefer 1 to 3 concrete search terms: service name, endpoint, team, HTTP method, tool name.
-- Use `-s <shelf>` for command lookups, adds, and lists.
-- Use `--target-shelf <name>` when importing a Postman collection into a new shelf with a name override.
-- Use `--list-shelves` when you need to discover available shelves first.
-- If you create a reusable command, offer to store it with `shellshelf -a ... --description ...`.
+Use machine-readable output and bounded searches. Shellshelf returns command text but never executes it.
 
 ## Workflow
 
-1. Discover shelves when the right bucket is unclear:
+1. Search before inventing or adding:
 
 ```bash
-shellshelf --list-shelves
-shellshelf --repo /path/to/shared-shellshelf --team platform --list-shelves
-shellshelf --repo /path/to/shared-shellshelf --all-teams --list-shelves
+shellshelf <service> <intent> --limit 3 --json
+shellshelf --team platform <service> <intent> --limit 3 --json
 ```
 
-2. Search the relevant shelf:
+Use `--local-only`, `--shared-only`, `--team`, or `--all-teams` only when scope matters. Add `-s <shelf>` only when the shelf is known.
+
+2. Reuse a named result by its returned `ref`:
 
 ```bash
-shellshelf -s curl github octocat
-shellshelf -s aws s3
-shellshelf --repo /path/to/shared-shellshelf --team platform -s curl health
+shellshelf --get local/curl/github-user --raw
+shellshelf --get shared/platform/aws/tail-logs --json
 ```
 
-3. Narrow or widen the read scope when shared storage matters:
+3. Render a named template by supplying every reported parameter:
 
 ```bash
-shellshelf --local-only -s curl health
-shellshelf --shared-only -s curl health
-shellshelf --repo /path/to/shared-shellshelf --team platform -s curl webhook
-shellshelf --repo /path/to/shared-shellshelf --all-teams -s curl webhook
+shellshelf --render local/curl/github-user --arg user=octocat --raw
 ```
 
-4. List commands when you need to browse inside one shelf:
+Treat the rendered output as a proposed command. Inspect it and follow normal execution/approval rules; `shellshelf` does not run it.
+
+4. If no suitable result exists, save the verified command with a stable name:
 
 ```bash
-shellshelf -s curl -l
-shellshelf --repo /path/to/shared-shellshelf --team platform -s curl -l
-shellshelf --repo /path/to/shared-shellshelf --all-teams -s curl -l
+shellshelf -s curl --name github-user \
+  --add 'curl "https://api.github.com/users/{{user}}"' \
+  --description 'Fetch a GitHub user' --json
+
+shellshelf --team platform -s aws --name tail-logs \
+  --add 'aws logs tail {{log_group}} --since {{since}}' \
+  --description 'Tail service logs' --open-pr --json
 ```
 
-5. Create a shelf explicitly when the bucket does not exist yet:
+Use lowercase names containing letters, digits, dots, underscores, or hyphens. Prefer names for anything likely to be reused. An exact duplicate `--add` can attach a name to a legacy unnamed command.
 
-```bash
-shellshelf --create-shelf git
-shellshelf --repo /path/to/shared-shellshelf --team platform --create-shelf aws
-```
+## What to Store
 
-6. Save a reusable command once you have the right form:
+Store a command when retrieving it later will save meaningful discovery or reconstruction work and it remains understandable without the current conversation.
 
-```bash
-shellshelf -s curl -a "curl https://api.github.com/users/octocat" \
-  --description "Fetch Octocat profile"
+- Store verified, non-obvious commands that are likely to recur and remain useful outside the current task.
+- Use a template when only a few values vary between runs.
+- Prefer a repository script, Make target, or task runner for multi-step logic, branching, or behavior tightly coupled to repository internals.
+- Do not store trivial commands, one-off paths or IDs, temporary debugging commands, incomplete fragments, unsafe destructive commands, or commands containing live secrets.
 
-shellshelf --repo /path/to/shared-shellshelf --team platform -s curl -a \
-  "curl https://api.example.com/platform/health" \
-  --description "Platform health check"
-```
+## Guardrails
 
-7. Import an exported Postman collection when a shelf should be seeded from an API client export:
-
-```bash
-shellshelf --import-postman ./postman-api.json
-shellshelf --target-shelf postman-api-v2 --import-postman ./postman-api.json
-shellshelf --repo /path/to/shared-shellshelf --team platform --import-postman ./platform-api.json
-```
-
-## Scope Rules
-
-- Use plain `shellshelf ...` for personal or configured default reads.
-- If no shelf is selected by CLI or config, `shellshelf` falls back to the built-in `default` shelf.
-- Use `--local-only` to suppress default shared reads.
-- Use `--shared-only` when only the configured shared target matters.
-- Use `--team <team>` for single-team reads and writes.
-- Use `--all-teams` for read-only searches, lists, and shelf discovery across every team.
-- Expect grouped output such as `=== LOCAL / CURL ===` and `=== SHARED / PLATFORM / CURL ===`.
-
-## Decision Rules
-
-- Use `shellshelf` before hardcoding a command in a script when repo or team context may matter.
-- Skip `shellshelf` for obvious one-off commands with no reuse value.
-- Search before adding, and avoid storing near-duplicates unless the intent is materially different.
-- If a Postman collection name collides with an existing shelf, retry the import with `--target-shelf <name>`.
-- Do not add commands that contain live secrets. Replace tokens, cookies, passwords, and API keys with placeholders such as `$TOKEN`.
-- Prefer adding a short description whenever the command alone will not explain intent.
-
-## Command Coverage
-
-- `shellshelf` stores any shell command string; it is no longer curl-only.
-- Shelves are explicit and file-backed, so commands should have one primary home such as `curl`, `git`, `aws`, `docker`, or `kubectl`.
-- There is no shell-history import. Commands are curated intentionally to avoid noise.
-- Exported Postman Collection v2.1 JSON imports are supported for creating new shelves.
-- Shared storage is team-based: `<repo>/teams/<team>/shelves/<shelf>.json`.
-
-## Examples
-
-`curl` lookup and save:
-
-```bash
-shellshelf -s curl github users
-shellshelf -s curl -a "curl -I https://api.github.com/users/octocat" \
-  --description "Fetch Octocat profile headers"
-```
-
-`git` command storage:
-
-```bash
-shellshelf -s git log
-shellshelf --create-shelf git
-shellshelf -s git -a "git log --oneline --graph -20" \
-  --description "Compact recent history graph"
-```
-
-`aws` command storage:
-
-```bash
-shellshelf -s aws s3
-shellshelf --repo /path/to/shared-shellshelf --team platform --create-shelf aws
-shellshelf --repo /path/to/shared-shellshelf --team platform -s aws -a "aws s3 ls s3://example-bucket" \
-  --description "List objects in the shared bucket"
-```
+- Never store live tokens, cookies, passwords, or API keys. Keep references such as `$TOKEN` or use template parameters.
+- Use `{{parameter}}` only on named commands. All parameters are required strings.
+- Search first and avoid near-duplicates.
+- Use shared `--open-pr` when a team command should be reviewed.
+- Use `--list-shelves --json` only when search cannot identify the right shelf.
+- Use human output only when presenting results to a person; prefer `--json` or `--raw` for agent work.

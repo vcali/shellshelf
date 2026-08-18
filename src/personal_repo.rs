@@ -414,7 +414,7 @@ fn merge_all_personal_shelves(
         let personal_path = personal_shelf_path(personal_context, &shelf);
         let local_db = CommandDatabase::load_from_file(&local_path)?;
         let personal_db = CommandDatabase::load_from_file(&personal_path)?;
-        let (merged_db, merge_outcome) = local_db.merged_with(&personal_db);
+        let (merged_db, merge_outcome) = local_db.merged_with(&personal_db)?;
 
         accumulate_merge_outcome(&mut outcome, merge_outcome);
 

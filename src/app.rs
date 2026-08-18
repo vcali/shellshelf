@@ -1,16 +1,18 @@
 use crate::browse::local_shelves_root;
 use crate::cli::build_cli;
+use crate::command_ref::CommandRef;
 use crate::config::{
     force_sync_personal_storage, force_sync_shared_storage, get_local_data_file_path,
-    list_all_team_shelves, list_local_shelves, list_team_shelves, load_all_team_commands,
-    load_team_commands, personal_repository_required_message, resolve_active_shelf, resolve_config,
-    resolve_config_path, resolve_data_file_path, resolve_personal_storage_context,
-    resolve_shared_storage_context_with_options, shared_repository_required_message, write_config,
-    DefaultSharedReadTarget, GithubPersonalRepoConfig, GithubSharedRepoConfig, PersonalRepoConfig,
-    PersonalStorageContext, SharedRepoConfig, SharedStorageContext, ShellshelfConfig,
+    get_team_data_file_path, list_all_team_shelves, list_local_shelves, list_team_shelves,
+    load_all_team_commands, load_team_commands, personal_repository_required_message,
+    resolve_active_shelf, resolve_config, resolve_config_path, resolve_data_file_path,
+    resolve_personal_storage_context, resolve_shared_storage_context_with_options,
+    shared_repository_required_message, write_config, DefaultSharedReadTarget,
+    GithubPersonalRepoConfig, GithubSharedRepoConfig, PersonalRepoConfig, PersonalStorageContext,
+    SharedRepoConfig, SharedStorageContext, ShellshelfConfig,
     DEFAULT_PERSONAL_REPO_SYNC_CHECK_INTERVAL_MINUTES,
 };
-use crate::database::{CommandDatabase, StoredCommand};
+use crate::database::{AddCommandOutcome, CommandDatabase, StoredCommand};
 use crate::github::{
     complete_background_github_repo_sync, normalize_github_repo_input,
     DEFAULT_GITHUB_REPO_AUTO_UPDATE_INTERVAL_MINUTES,
@@ -27,6 +29,7 @@ use crate::shared_repo_publish::{
 };
 use crate::web::run_web_server;
 use crate::Result;
+use serde::Serialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -46,8 +49,10 @@ struct OutputSection {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct OutputEntry {
+    name: Option<String>,
     command: String,
     description: Option<String>,
+    template: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,6 +72,7 @@ struct OutputSummary {
     hidden_local_duplicates: usize,
     hidden_due_to_limit: usize,
     active_limit: Option<usize>,
+    search_limit: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,17 +130,88 @@ impl OutputSection {
 impl OutputEntry {
     fn from_command(command: &StoredCommand) -> Self {
         Self {
+            name: command.name.clone(),
             command: command.command.clone(),
             description: command.description.clone(),
+            template: None,
         }
     }
 
     fn from_owned_command(command: StoredCommand) -> Self {
         Self {
+            name: command.name,
             command: command.command,
             description: command.description,
+            template: None,
         }
     }
+}
+
+#[derive(Debug, Serialize)]
+struct JsonResults {
+    schema_version: u8,
+    results: Vec<JsonCommandResult>,
+    summary: JsonSummary,
+}
+
+#[derive(Debug, Serialize)]
+struct JsonCommandResult {
+    #[serde(rename = "ref")]
+    command_ref: Option<String>,
+    name: Option<String>,
+    description: Option<String>,
+    command: String,
+    parameters: Vec<String>,
+    source: JsonCommandSource,
+    shelf: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    template: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum JsonCommandSource {
+    Local,
+    Shared { team: String },
+}
+
+#[derive(Debug, Serialize)]
+struct JsonSummary {
+    hidden_duplicates: usize,
+    hidden_by_limit: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct JsonSingleResult {
+    schema_version: u8,
+    result: JsonCommandResult,
+}
+
+#[derive(Debug, Serialize)]
+struct JsonShelfResults<'a> {
+    schema_version: u8,
+    results: Vec<JsonShelfResult<'a>>,
+}
+
+#[derive(Debug, Serialize)]
+struct JsonShelfResult<'a> {
+    source: &'a str,
+    team: Option<&'a str>,
+    shelf: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct JsonAddResult {
+    schema_version: u8,
+    operation: &'static str,
+    status: &'static str,
+    result: JsonCommandResult,
+    pull_request_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct PublishOutcome {
+    pull_request_url: Option<String>,
 }
 
 impl From<DefaultSharedReadTarget> for SharedReadTarget {
@@ -176,6 +253,7 @@ pub fn run() -> Result<()> {
     let force_sync_personal = matches.get_flag("force-sync-personal");
     let import_postman_path = matches.get_one::<String>("import-postman");
     let list_commands = matches.get_flag("list");
+    let json_output = matches.get_flag("json");
     let sync_personal = matches.get_flag("sync-personal");
     let search_keywords: Option<Vec<String>> = matches
         .get_many::<String>("keywords")
@@ -204,6 +282,24 @@ pub fn run() -> Result<()> {
     if sync_personal {
         let personal_context = resolve_personal_storage_context(&config, true)?;
         return run_personal_sync(personal_context.as_ref());
+    }
+
+    if let Some(reference) = matches
+        .get_one::<String>("get")
+        .or_else(|| matches.get_one::<String>("render"))
+    {
+        let command_ref = CommandRef::parse(reference)?;
+        let shared_context = if matches!(&command_ref, CommandRef::Shared { .. }) {
+            resolve_shared_storage_context_with_options(&matches, &config, false)?
+        } else {
+            None
+        };
+        return get_or_render_command(
+            &matches,
+            shared_context.as_ref(),
+            command_ref,
+            matches.get_one::<String>("render").is_some(),
+        );
     }
 
     let all_teams = matches.get_flag("all-teams");
@@ -249,7 +345,7 @@ pub fn run() -> Result<()> {
     };
 
     if list_shelves {
-        return list_shelves_for_scope(&matches, &config, shared_context.as_ref());
+        return list_shelves_for_scope(&matches, &config, shared_context.as_ref(), json_output);
     }
 
     if matches.get_one::<String>("create-shelf").is_some() {
@@ -275,8 +371,10 @@ pub fn run() -> Result<()> {
             personal_context_for_write,
             data_file,
             shelf,
+            false,
             || create_shelf(&matches, data_file, shelf),
-        );
+        )
+        .map(|_| ());
     }
 
     if let Some(import_path) = import_postman_path {
@@ -298,8 +396,10 @@ pub fn run() -> Result<()> {
             personal_context_for_write,
             &get_local_data_file_path(&import_shelf)?,
             &import_shelf,
+            false,
             || Ok(save_postman_import(&matches, shared_context.as_ref(), import_outcome)?.changed),
-        );
+        )
+        .map(|_| ());
     }
 
     if let Some(command) = add_command {
@@ -320,32 +420,87 @@ pub fn run() -> Result<()> {
         } else {
             None
         };
-        return run_write_operation(
+        let description = matches
+            .get_one::<String>("description")
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        let name = matches.get_one::<String>("name");
+        let mut add_outcome = AddCommandOutcome::Unchanged;
+        let publish_outcome = run_write_operation(
             publish_context,
             personal_context_for_write,
             data_file,
             shelf,
+            json_output,
             || {
-                let description = matches
-                    .get_one::<String>("description")
-                    .map(|value| value.trim().to_string())
-                    .filter(|value| !value.is_empty());
                 let mut db = CommandDatabase::load_from_file(data_file)?;
-                let added = db.add_command(command.clone(), description.clone());
-                if added {
+                add_outcome =
+                    db.add_named_command(command.clone(), description.clone(), name.cloned())?;
+                let changed = add_outcome != AddCommandOutcome::Unchanged;
+                if changed {
                     db.save_to_file(data_file)?;
-                    match description {
-                        Some(description) => {
-                            println!("Added command to shelf '{shelf}': {command} ({description})");
-                        }
-                        None => println!("Added command to shelf '{shelf}': {command}"),
-                    }
-                } else {
-                    println!("Command already exists in shelf '{shelf}'.");
                 }
-                Ok(added)
+                Ok(changed)
             },
-        );
+        )?;
+
+        if json_output {
+            let database = CommandDatabase::load_from_file(data_file)?;
+            let entry = OutputEntry::from_command(match name {
+                Some(name) => database
+                    .find_by_name(name)
+                    .expect("successful named add persisted the command"),
+                None => database
+                    .commands
+                    .iter()
+                    .find(|stored| stored.command == *command)
+                    .expect("successful add persisted the command"),
+            });
+            let section = match matches.get_one::<String>("team") {
+                Some(team) => OutputSection::shared_team(team, shelf, vec![entry]),
+                None => OutputSection::local(shelf, vec![entry]),
+            };
+            let result = sections_to_json_results(std::slice::from_ref(&section))?
+                .into_iter()
+                .next()
+                .expect("add result has one command");
+            println!(
+                "{}",
+                serde_json::to_string(&JsonAddResult {
+                    schema_version: 1,
+                    operation: "add",
+                    status: add_status(add_outcome),
+                    result,
+                    pull_request_url: publish_outcome.pull_request_url,
+                })?
+            );
+        } else {
+            match (add_outcome, name) {
+                (AddCommandOutcome::Added, None) => match description {
+                    Some(description) => {
+                        println!("Added command to shelf '{shelf}': {command} ({description})")
+                    }
+                    None => println!("Added command to shelf '{shelf}': {command}"),
+                },
+                (AddCommandOutcome::Added, Some(name)) => match description {
+                    Some(description) => println!(
+                        "Added command '{name}' to shelf '{shelf}': {command} ({description})"
+                    ),
+                    None => println!("Added command '{name}' to shelf '{shelf}': {command}"),
+                },
+                (AddCommandOutcome::NamedExisting, Some(name)) => {
+                    println!("Named existing command '{name}' in shelf '{shelf}'.")
+                }
+                (AddCommandOutcome::Unchanged, Some(name)) => {
+                    println!("Command '{name}' already exists in shelf '{shelf}'.")
+                }
+                (AddCommandOutcome::NamedExisting, None) => unreachable!("naming needs a name"),
+                (AddCommandOutcome::Unchanged, None) => {
+                    println!("Command already exists in shelf '{shelf}'.")
+                }
+            }
+        }
+        return Ok(());
     }
 
     if list_commands {
@@ -369,11 +524,12 @@ pub fn run() -> Result<()> {
                 active_limit: limit,
                 ..OutputSummary::default()
             };
-            print_sections(
+            emit_sections(
                 &sections,
                 &empty_message(search_keywords.is_some(), Some(shelf)),
                 &summary,
-            );
+                json_output,
+            )?;
             return Ok(());
         }
 
@@ -391,11 +547,12 @@ pub fn run() -> Result<()> {
                 active_limit: limit,
                 ..OutputSummary::default()
             };
-            print_sections(
+            emit_sections(
                 &sections,
                 &empty_message(search_keywords.is_some(), Some(shelf)),
                 &summary,
-            );
+                json_output,
+            )?;
             return Ok(());
         }
 
@@ -412,38 +569,51 @@ pub fn run() -> Result<()> {
             hidden_local_duplicates,
             hidden_due_to_limit: 0,
             active_limit: limit,
+            search_limit: false,
         };
         summary.hidden_due_to_limit = apply_list_limit(&mut sections, limit);
-        print_sections(
+        emit_sections(
             &sections,
             &empty_message(search_keywords.is_some(), Some(shelf)),
             &summary,
-        );
+            json_output,
+        )?;
         return Ok(());
     }
 
     if let Some(keyword_vec) = search_keywords.as_deref() {
+        let limit = matches
+            .get_one::<usize>("limit")
+            .copied()
+            .and_then(normalize_limit);
         if let Some(shelf) = shelf.as_deref() {
             if let Some(team) = matches.get_one::<String>("team") {
                 let data_file = data_file
                     .as_deref()
                     .expect("data file should be resolved for team shelf search");
                 let commands = CommandDatabase::load_from_file(data_file)?;
-                let sections = vec![OutputSection::shared_team(
+                let mut sections = vec![OutputSection::shared_team(
                     team.clone(),
                     shelf.to_string(),
                     filter_commands(&commands, shelf, Some(keyword_vec)),
                 )];
-                print_sections(
+                let summary = OutputSummary {
+                    hidden_due_to_limit: apply_list_limit(&mut sections, limit),
+                    active_limit: limit,
+                    search_limit: true,
+                    ..OutputSummary::default()
+                };
+                emit_sections(
                     &sections,
                     &empty_message(true, Some(shelf)),
-                    &OutputSummary::default(),
-                );
+                    &summary,
+                    json_output,
+                )?;
                 return Ok(());
             }
 
             if all_teams {
-                let sections = load_shared_sections_for_target(
+                let mut sections = load_shared_sections_for_target(
                     shared_context
                         .as_ref()
                         .ok_or(shared_repository_required_message())?,
@@ -451,11 +621,18 @@ pub fn run() -> Result<()> {
                     shelf,
                     Some(keyword_vec),
                 )?;
-                print_sections(
+                let summary = OutputSummary {
+                    hidden_due_to_limit: apply_list_limit(&mut sections, limit),
+                    active_limit: limit,
+                    search_limit: true,
+                    ..OutputSummary::default()
+                };
+                emit_sections(
                     &sections,
                     &empty_message(true, Some(shelf)),
-                    &OutputSummary::default(),
-                );
+                    &summary,
+                    json_output,
+                )?;
                 return Ok(());
             }
 
@@ -464,7 +641,7 @@ pub fn run() -> Result<()> {
                 .expect("data file should be resolved for single-shelf search");
             let local_db = CommandDatabase::load_from_file(data_file)?;
             let plan = resolve_default_read_plan(&matches, &config, shared_context.as_ref())?;
-            let (sections, hidden_local_duplicates) = load_default_read_sections(
+            let (mut sections, hidden_local_duplicates) = load_default_read_sections(
                 &local_db,
                 shared_context.as_ref(),
                 shelf,
@@ -473,14 +650,20 @@ pub fn run() -> Result<()> {
             )?;
             let summary = OutputSummary {
                 hidden_local_duplicates,
-                hidden_due_to_limit: 0,
-                active_limit: None,
+                hidden_due_to_limit: apply_list_limit(&mut sections, limit),
+                active_limit: limit,
+                search_limit: true,
             };
-            print_sections(&sections, &empty_message(true, Some(shelf)), &summary);
+            emit_sections(
+                &sections,
+                &empty_message(true, Some(shelf)),
+                &summary,
+                json_output,
+            )?;
             return Ok(());
         }
 
-        let (sections, hidden_local_duplicates) = load_search_sections_without_active_shelf(
+        let (mut sections, hidden_local_duplicates) = load_search_sections_without_active_shelf(
             &matches,
             &config,
             shared_context.as_ref(),
@@ -488,10 +671,11 @@ pub fn run() -> Result<()> {
         )?;
         let summary = OutputSummary {
             hidden_local_duplicates,
-            hidden_due_to_limit: 0,
-            active_limit: None,
+            hidden_due_to_limit: apply_list_limit(&mut sections, limit),
+            active_limit: limit,
+            search_limit: true,
         };
-        print_sections(&sections, &empty_message(true, None), &summary);
+        emit_sections(&sections, &empty_message(true, None), &summary, json_output)?;
     }
 
     Ok(())
@@ -759,21 +943,23 @@ fn run_write_operation<F>(
     personal_context: Option<&PersonalStorageContext>,
     local_data_file: &Path,
     shelf: &str,
+    quiet: bool,
     operation: F,
-) -> Result<()>
+) -> Result<PublishOutcome>
 where
     F: FnOnce() -> Result<bool>,
 {
     let result = operation().and_then(|changed| {
-        publish_shared_changes(publish_context.clone(), changed)?;
-        publish_personal_changes(personal_context, local_data_file, shelf, changed)
+        let publish_outcome = publish_shared_changes(publish_context.clone(), changed, quiet)?;
+        publish_personal_changes(personal_context, local_data_file, shelf, changed, quiet)?;
+        Ok(publish_outcome)
     });
     let cleanup_result = cleanup_shared_publish_context(publish_context.as_ref());
 
     match (result, cleanup_result) {
-        (Ok(()), Ok(())) => Ok(()),
+        (Ok(outcome), Ok(())) => Ok(outcome),
         (Err(error), Ok(())) => Err(error),
-        (Ok(()), Err(cleanup_error)) => Err(cleanup_error),
+        (Ok(_), Err(cleanup_error)) => Err(cleanup_error),
         (Err(error), Err(cleanup_error)) => {
             Err(format!("{error} Cleanup also failed: {cleanup_error}").into())
         }
@@ -785,6 +971,7 @@ fn publish_personal_changes(
     local_data_file: &Path,
     shelf: &str,
     changed: bool,
+    quiet: bool,
 ) -> Result<()> {
     let Some(personal_context) = personal_context else {
         return Ok(());
@@ -794,10 +981,13 @@ fn publish_personal_changes(
         return Ok(());
     }
 
-    if sync_personal_local_shelf(personal_context, local_data_file, shelf)? {
-        println!("Updated personal sync for local shelf '{shelf}'.");
-    } else {
-        println!("Local shelf '{shelf}' already matched the personal repository.");
+    let synchronized = sync_personal_local_shelf(personal_context, local_data_file, shelf)?;
+    if !quiet {
+        if synchronized {
+            println!("Updated personal sync for local shelf '{shelf}'.");
+        } else {
+            println!("Local shelf '{shelf}' already matched the personal repository.");
+        }
     }
 
     Ok(())
@@ -821,27 +1011,105 @@ fn cleanup_shared_publish_context(publish_context: Option<&SharedPublishContext>
 fn publish_shared_changes(
     publish_context: Option<SharedPublishContext>,
     changed: bool,
-) -> Result<()> {
+    quiet: bool,
+) -> Result<PublishOutcome> {
     let Some(publish_context) = publish_context else {
-        return Ok(());
+        return Ok(PublishOutcome::default());
     };
 
     if !changed {
-        println!("No shared changes were published.");
-        return Ok(());
+        if !quiet {
+            println!("No shared changes were published.");
+        }
+        return Ok(PublishOutcome::default());
     }
 
-    if let Some(pr_url) = publish_pull_request(
+    let pull_request_url = publish_pull_request(
         &publish_context.repo_root,
         &publish_context.prepared_branch,
         &publish_context.plan,
-    )? {
-        println!("Opened pull request: {pr_url}");
-    } else {
-        println!("No shared changes were published.");
+    )?;
+    if !quiet {
+        if let Some(pr_url) = pull_request_url.as_deref() {
+            println!("Opened pull request: {pr_url}");
+        } else {
+            println!("No shared changes were published.");
+        }
     }
 
-    Ok(())
+    Ok(PublishOutcome { pull_request_url })
+}
+
+fn add_status(outcome: AddCommandOutcome) -> &'static str {
+    match outcome {
+        AddCommandOutcome::Added => "added",
+        AddCommandOutcome::NamedExisting => "named_existing",
+        AddCommandOutcome::Unchanged => "unchanged",
+    }
+}
+
+fn get_or_render_command(
+    matches: &clap::ArgMatches,
+    shared_context: Option<&SharedStorageContext>,
+    command_ref: CommandRef,
+    render: bool,
+) -> Result<()> {
+    let data_file = match &command_ref {
+        CommandRef::Local { shelf, .. } => get_local_data_file_path(shelf)?,
+        CommandRef::Shared { team, shelf, .. } => {
+            let context = shared_context.ok_or(shared_repository_required_message())?;
+            get_team_data_file_path(&context.repository_root, &context.teams_dir, team, shelf)?
+        }
+    };
+    let database = CommandDatabase::load_from_file(&data_file)?;
+    let stored = database
+        .find_by_name(command_ref.name())
+        .ok_or_else(|| format!("Named command '{command_ref}' was not found."))?;
+
+    let mut entry = OutputEntry::from_command(stored);
+    if render {
+        let arguments = crate::template::parse_arguments(
+            matches
+                .get_many::<String>("arg")
+                .into_iter()
+                .flatten()
+                .map(String::as_str),
+        )?;
+        entry.template = Some(entry.command.clone());
+        entry.command = crate::template::render(&entry.command, &arguments)?;
+    }
+
+    if matches.get_flag("raw") {
+        println!("{}", entry.command);
+        return Ok(());
+    }
+
+    let section = match &command_ref {
+        CommandRef::Local { shelf, .. } => OutputSection::local(shelf, vec![entry]),
+        CommandRef::Shared { team, shelf, .. } => {
+            OutputSection::shared_team(team, shelf, vec![entry])
+        }
+    };
+    if matches.get_flag("json") {
+        let result = sections_to_json_results(std::slice::from_ref(&section))?
+            .into_iter()
+            .next()
+            .expect("exact lookup has one command");
+        println!(
+            "{}",
+            serde_json::to_string(&JsonSingleResult {
+                schema_version: 1,
+                result,
+            })?
+        );
+        return Ok(());
+    }
+    emit_sections(
+        &[section],
+        "Named command was not found.",
+        &OutputSummary::default(),
+        false,
+    )
 }
 
 fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
@@ -861,6 +1129,7 @@ fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
         .get_many::<String>("keywords")
         .map(|values| values.len() > 0)
         .unwrap_or(false);
+    validate_agent_flags(matches, has_keywords)?;
 
     if add_repo.is_some()
         && (web_mode
@@ -1076,8 +1345,8 @@ fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
         return Err("--local-only and --shared-only cannot be used with --all-teams.".into());
     }
 
-    if matches.get_one::<usize>("limit").is_some() && !matches.get_flag("list") {
-        return Err("--limit can only be used with --list.".into());
+    if matches.get_one::<usize>("limit").is_some() && !matches.get_flag("list") && !has_keywords {
+        return Err("--limit can only be used with --list or search keywords.".into());
     }
 
     if matches.get_one::<String>("description").is_some()
@@ -1234,6 +1503,78 @@ fn validate_matches(matches: &clap::ArgMatches) -> Result<()> {
     Ok(())
 }
 
+fn validate_agent_flags(matches: &clap::ArgMatches, has_keywords: bool) -> Result<()> {
+    let get = matches.get_one::<String>("get").is_some();
+    let render = matches.get_one::<String>("render").is_some();
+    let add = matches.get_one::<String>("add").is_some();
+    let json = matches.get_flag("json");
+    let raw = matches.get_flag("raw");
+    let has_args = matches
+        .get_many::<String>("arg")
+        .is_some_and(|values| values.len() > 0);
+
+    if get && render {
+        return Err("--get and --render cannot be used together.".into());
+    }
+    if matches.get_one::<String>("name").is_some() && !add {
+        return Err("--name can only be used with --add.".into());
+    }
+    if raw && !(get || render) {
+        return Err("--raw can only be used with --get or --render.".into());
+    }
+    if raw && json {
+        return Err("--raw and --json cannot be used together.".into());
+    }
+    if has_args && !render {
+        return Err("--arg can only be used with --render.".into());
+    }
+    if json
+        && !(add
+            || get
+            || render
+            || matches.get_flag("list")
+            || matches.get_flag("list-shelves")
+            || has_keywords)
+    {
+        return Err(
+            "--json requires --add, --get, --render, --list, --list-shelves, or search keywords."
+                .into(),
+        );
+    }
+
+    if get || render {
+        let incompatible = add
+            || matches.get_one::<String>("description").is_some()
+            || matches.get_one::<String>("name").is_some()
+            || matches.get_flag("list")
+            || matches.get_flag("list-shelves")
+            || matches.get_one::<String>("shelf").is_some()
+            || matches.get_one::<String>("team").is_some()
+            || matches.get_flag("all-teams")
+            || matches.get_flag("local-only")
+            || matches.get_flag("shared-only")
+            || matches.get_one::<String>("create-shelf").is_some()
+            || matches.get_one::<String>("import-postman").is_some()
+            || matches.get_one::<String>("target-shelf").is_some()
+            || matches.get_flag("open-pr")
+            || matches.get_one::<String>("base-branch").is_some()
+            || matches.get_one::<String>("pr-branch").is_some()
+            || matches.get_one::<usize>("limit").is_some()
+            || matches.get_flag("web")
+            || matches.get_flag("force-sync")
+            || matches.get_flag("force-sync-personal")
+            || matches.get_flag("sync-personal")
+            || matches.get_one::<String>("add-repo").is_some()
+            || matches.get_one::<String>("add-personal-repo").is_some()
+            || has_keywords;
+        if incompatible {
+            return Err("--get and --render must be used as standalone read operations.".into());
+        }
+    }
+
+    Ok(())
+}
+
 fn resolve_target_shelf(matches: &clap::ArgMatches, config: &ShellshelfConfig) -> Result<String> {
     if let Some(create_shelf) = matches.get_one::<String>("create-shelf") {
         crate::config::validate_shelf_name(create_shelf)?;
@@ -1341,6 +1682,7 @@ fn list_shelves_for_scope(
     matches: &clap::ArgMatches,
     config: &ShellshelfConfig,
     shared_context: Option<&SharedStorageContext>,
+    json: bool,
 ) -> Result<()> {
     if let Some(team) = matches.get_one::<String>("team") {
         let shared_context = shared_context.ok_or(shared_repository_required_message())?;
@@ -1348,17 +1690,18 @@ fn list_shelves_for_scope(
             title: format!("Shared / {team}"),
             shelves: list_team_shelves(shared_context, team)?,
         }];
-        print_shelf_sections(
+        emit_shelf_sections(
             &sections,
             &format!("No shelves available for team '{team}'."),
-        );
+            json,
+        )?;
         return Ok(());
     }
 
     if matches.get_flag("all-teams") {
         let shared_context = shared_context.ok_or(shared_repository_required_message())?;
         let sections = sections_from_grouped_team_shelves(list_all_team_shelves(shared_context)?);
-        print_shelf_sections(&sections, "No shelves available in shared storage.");
+        emit_shelf_sections(&sections, "No shelves available in shared storage.", json)?;
         return Ok(());
     }
 
@@ -1389,7 +1732,7 @@ fn list_shelves_for_scope(
         None => {}
     }
 
-    print_shelf_sections(&sections, "No shelves available.");
+    emit_shelf_sections(&sections, "No shelves available.", json)?;
     Ok(())
 }
 
@@ -1783,7 +2126,28 @@ fn empty_message(filtered: bool, shelf: Option<&str>) -> String {
     }
 }
 
-fn print_sections(sections: &[OutputSection], empty_message: &str, summary: &OutputSummary) {
+fn emit_sections(
+    sections: &[OutputSection],
+    empty_message: &str,
+    summary: &OutputSummary,
+    json: bool,
+) -> Result<()> {
+    if json {
+        let results = sections_to_json_results(sections)?;
+        println!(
+            "{}",
+            serde_json::to_string(&JsonResults {
+                schema_version: 1,
+                results,
+                summary: JsonSummary {
+                    hidden_duplicates: summary.hidden_local_duplicates,
+                    hidden_by_limit: summary.hidden_due_to_limit,
+                },
+            })?
+        );
+        return Ok(());
+    }
+
     let sections: Vec<&OutputSection> = sections
         .iter()
         .filter(|section| !section.entries.is_empty())
@@ -1791,7 +2155,7 @@ fn print_sections(sections: &[OutputSection], empty_message: &str, summary: &Out
 
     if sections.is_empty() {
         println!("{empty_message}");
-        return;
+        return Ok(());
     }
 
     for (section_index, section) in sections.iter().enumerate() {
@@ -1816,8 +2180,11 @@ fn print_sections(sections: &[OutputSection], empty_message: &str, summary: &Out
     }
 
     let duplicate_message = format_duplicate_hidden_message(summary.hidden_local_duplicates);
-    let limit_message =
-        format_limit_hidden_message(summary.hidden_due_to_limit, summary.active_limit);
+    let limit_message = format_limit_hidden_message(
+        summary.hidden_due_to_limit,
+        summary.active_limit,
+        summary.search_limit,
+    );
 
     if duplicate_message.is_some() || limit_message.is_some() {
         println!();
@@ -1830,9 +2197,70 @@ fn print_sections(sections: &[OutputSection], empty_message: &str, summary: &Out
     if let Some(message) = limit_message {
         println!("{message}");
     }
+
+    Ok(())
 }
 
-fn print_shelf_sections(sections: &[ShelfSection], empty_message: &str) {
+fn sections_to_json_results(sections: &[OutputSection]) -> Result<Vec<JsonCommandResult>> {
+    let mut results = Vec::new();
+    for section in sections {
+        let (source, shelf) = match &section.source {
+            OutputSectionSource::Local { shelf } => (JsonCommandSource::Local, shelf),
+            OutputSectionSource::SharedTeam { team, shelf } => {
+                (JsonCommandSource::Shared { team: team.clone() }, shelf)
+            }
+        };
+        for entry in &section.entries {
+            let command_ref = entry.name.as_deref().map(|name| match &section.source {
+                OutputSectionSource::Local { shelf } => format!("local/{shelf}/{name}"),
+                OutputSectionSource::SharedTeam { team, shelf } => {
+                    format!("shared/{team}/{shelf}/{name}")
+                }
+            });
+            let parameters = match entry.name.as_deref() {
+                Some(_) => crate::template::parameters(
+                    entry.template.as_deref().unwrap_or(&entry.command),
+                )?,
+                None => Vec::new(),
+            };
+            results.push(JsonCommandResult {
+                command_ref,
+                name: entry.name.clone(),
+                description: entry.description.clone(),
+                command: entry.command.clone(),
+                parameters,
+                source: source.clone(),
+                shelf: shelf.clone(),
+                template: entry.template.clone(),
+            });
+        }
+    }
+    Ok(results)
+}
+
+fn emit_shelf_sections(sections: &[ShelfSection], empty_message: &str, json: bool) -> Result<()> {
+    if json {
+        let results = sections
+            .iter()
+            .flat_map(|section| {
+                let team = section.title.strip_prefix("Shared / ");
+                section.shelves.iter().map(move |shelf| JsonShelfResult {
+                    source: if team.is_some() { "shared" } else { "local" },
+                    team,
+                    shelf,
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string(&JsonShelfResults {
+                schema_version: 1,
+                results,
+            })?
+        );
+        return Ok(());
+    }
+
     let sections: Vec<&ShelfSection> = sections
         .iter()
         .filter(|section| !section.shelves.is_empty())
@@ -1840,7 +2268,7 @@ fn print_shelf_sections(sections: &[ShelfSection], empty_message: &str) {
 
     if sections.is_empty() {
         println!("{empty_message}");
-        return;
+        return Ok(());
     }
 
     for (section_index, section) in sections.iter().enumerate() {
@@ -1855,6 +2283,7 @@ fn print_shelf_sections(sections: &[ShelfSection], empty_message: &str) {
             println!("[{}] {}", index + 1, shelf);
         }
     }
+    Ok(())
 }
 
 fn format_section_header(title: &str) -> String {
@@ -1876,18 +2305,20 @@ fn format_duplicate_hidden_message(hidden_local_duplicates: usize) -> Option<Str
 fn format_limit_hidden_message(
     hidden_due_to_limit: usize,
     active_limit: Option<usize>,
+    search_limit: bool,
 ) -> Option<String> {
     let limit = active_limit?;
+    let limit_kind = if search_limit { "search" } else { "list" };
 
     if hidden_due_to_limit == 0 {
         None
     } else if hidden_due_to_limit == 1 {
         Some(format!(
-            "Showing first {limit} commands. 1 additional command was hidden by the active list limit."
+            "Showing first {limit} commands. 1 additional command was hidden by the active {limit_kind} limit."
         ))
     } else {
         Some(format!(
-            "Showing first {limit} commands. {hidden_due_to_limit} additional commands were hidden by the active list limit."
+            "Showing first {limit} commands. {hidden_due_to_limit} additional commands were hidden by the active {limit_kind} limit."
         ))
     }
 }
@@ -1919,20 +2350,26 @@ mod tests {
     fn test_hide_local_duplicates_against_shared_sections() {
         let mut local_commands = vec![
             OutputEntry {
+                name: None,
                 command: "curl https://shared.example.com/health".to_string(),
                 description: Some("Shared health".to_string()),
+                template: None,
             },
             OutputEntry {
+                name: None,
                 command: "curl https://local.example.com/health".to_string(),
                 description: Some("Local health".to_string()),
+                template: None,
             },
         ];
         let shared_sections = vec![OutputSection::shared_team(
             "platform",
             "curl",
             vec![OutputEntry {
+                name: None,
                 command: "curl https://shared.example.com/health".to_string(),
                 description: Some("Shared health".to_string()),
+                template: None,
             }],
         )];
 
@@ -1942,8 +2379,10 @@ mod tests {
         assert_eq!(
             local_commands,
             vec![OutputEntry {
+                name: None,
                 command: "curl https://local.example.com/health".to_string(),
                 description: Some("Local health".to_string()),
+                template: None,
             }]
         );
     }
@@ -1955,12 +2394,16 @@ mod tests {
                 "curl",
                 vec![
                     OutputEntry {
+                        name: None,
                         command: "curl https://local.example.com/one".to_string(),
                         description: None,
+                        template: None,
                     },
                     OutputEntry {
+                        name: None,
                         command: "curl https://local.example.com/two".to_string(),
                         description: Some("Second".to_string()),
+                        template: None,
                     },
                 ],
             ),
@@ -1968,8 +2411,10 @@ mod tests {
                 "platform",
                 "curl",
                 vec![OutputEntry {
+                    name: None,
                     command: "curl https://shared.example.com/one".to_string(),
                     description: None,
+                    template: None,
                 }],
             ),
         ];
@@ -2002,14 +2447,14 @@ mod tests {
     #[test]
     fn test_limit_hidden_message_pluralization() {
         assert_eq!(
-            format_limit_hidden_message(1, Some(20)),
+            format_limit_hidden_message(1, Some(20), false),
             Some(
                 "Showing first 20 commands. 1 additional command was hidden by the active list limit."
                     .to_string()
             )
         );
         assert_eq!(
-            format_limit_hidden_message(3, Some(10)),
+            format_limit_hidden_message(3, Some(10), false),
             Some(
                 "Showing first 10 commands. 3 additional commands were hidden by the active list limit."
                     .to_string()

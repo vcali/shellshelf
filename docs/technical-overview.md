@@ -12,6 +12,7 @@ The application is split into focused modules:
 - [`src/personal_repo.rs`](../src/personal_repo.rs): local-shelf personal sync plus direct commit/push flow
 - [`src/browse.rs`](../src/browse.rs): shared browse data loading for local and shared shelves
 - [`src/cli.rs`](../src/cli.rs): `clap` command definition
+- [`src/command_ref.rs`](../src/command_ref.rs): canonical local/shared named-command references
 - [`src/config.rs`](../src/config.rs): config loading, shelf resolution, shared-storage resolution, path validation
 - [`src/curl_runner.rs`](../src/curl_runner.rs): curl-only command validation, direct process execution, and preview-body storage
 - [`src/database.rs`](../src/database.rs): stored command model and JSON persistence
@@ -19,6 +20,7 @@ The application is split into focused modules:
 - [`src/keywords.rs`](../src/keywords.rs): keyword extraction and regex reuse
 - [`src/postman_import.rs`](../src/postman_import.rs): exported Postman collection parsing and curl conversion
 - [`src/shared_repo_publish.rs`](../src/shared_repo_publish.rs): shared-repo branch preparation, commit/push flow, and PR creation
+- [`src/template.rs`](../src/template.rs): parameter discovery and quote-aware, non-executing rendering
 - [`src/web.rs`](../src/web.rs): localhost web server, API routes, and static asset serving
 
 ## Runtime Flow
@@ -43,6 +45,8 @@ At a high level, execution is:
    - list shelves
    - list
    - search
+   - exact named-command get
+   - parameterized command render
 7. If `--open-pr` is attached to a shared write, prepare a clean publish branch before mutating storage.
 8. Persist updated JSON if the operation mutates storage.
 9. If `--open-pr` was requested and the write changed a shared shelf file, commit, push, and open a pull request.
@@ -82,11 +86,14 @@ Personal storage:
 
 Each entry stores:
 
+- an optional stable name, unique within its shelf
 - the original command string
 - an optional short description
 - the extracted keyword list
 
-The web interface does not change this storage model. It reads and writes the same JSON shelves, while keeping request responses in memory only.
+Canonical references are derived rather than persisted: `local/<shelf>/<name>` and `shared/<team>/<shelf>/<name>`. Legacy entries without names remain valid, and serialization omits the absent field. Template parameters are derived from `{{parameter}}` placeholders in named command text rather than stored separately.
+
+The web interface does not change this storage model. It reads and writes optional names with the same JSON shelves, while keeping request responses in memory only.
 
 ## Search Indexing
 
@@ -99,6 +106,7 @@ Current indexing behavior:
 - stored keywords are normalized to lowercase
 - search keywords are normalized once per query
 - fallback substring matching checks the full command text and the optional description
+- fallback substring matching also checks the optional stable name
 - shelf names are matched at read time from the current shelf context rather than being persisted on each command record
 - HTTP commands keep protocol-aware indexing, while non-HTTP commands rely on generic tokenization
 
@@ -153,8 +161,9 @@ Current behavior:
 - `--team` and `--all-teams` stay explicit shared-only modes
 - local entries that exactly duplicate displayed shared entries are hidden from the default combined output
 - `--list` uses a default result cap unless `default_list_limit` or `--limit` overrides it
+- search is unlimited by default but accepts a global `--limit` applied after duplicate hiding
 - `--list-shelves` is uncapped and groups names by local/shared source, or by team when `--all-teams` is used
-- output uses plain `=== ... ===` section banners with multiline-safe entry blocks, and descriptions render inline after the bracketed index
+- output uses plain `=== ... ===` section banners by default; `--json` provides versioned machine output and exact get/render operations also support command-only `--raw`
 - `--web` uses a fixed localhost default port of `4812`, overridden first by `--web-port` and then by `web.port` config when the CLI flag is absent
 
 ## Deliberate Product Constraints
